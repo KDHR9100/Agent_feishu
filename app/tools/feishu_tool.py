@@ -1,4 +1,5 @@
 ﻿import requests
+from app.config import config
 from typing import Optional, Dict, Any
 
 
@@ -78,4 +79,7 @@ class FeishuTool:
         return response.json()
 
 
-feishu_tool = FeishuTool()
+feishu_tool = FeishuTool(
+    app_id=config.FEISHU_APP_ID,
+    app_secret=config.FEISHU_APP_SECRET
+)
