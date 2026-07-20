@@ -92,7 +92,7 @@ feishu_ws_process = None
 @app.on_event("startup")
 async def startup_event():
     global feishu_ws_process
-    
+
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Starting...")
     logger.info("=" * 60)
@@ -156,7 +156,7 @@ async def startup_event():
         logger.info("Starting Feishu WebSocket client...")
         if config.FEISHU_APP_ID and config.FEISHU_APP_SECRET:
             feishu_ws_process = subprocess.Popen(
-                [sys.executable, "-m", "app.tools.feishu_ws", 
+                [sys.executable, "-m", "app.tools.feishu_ws",
                  config.FEISHU_APP_ID, config.FEISHU_APP_SECRET],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -176,14 +176,14 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     global feishu_ws_process
-    
+
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Shutting Down...")
     logger.info("=" * 60)
-    
+
     if feishu_ws_process:
         try:
-            logger.info("Stopping Feishu WebSocket client (PID: %d)...", feishu_ws_process.pid)
+            logger.info("Stopping Feishu WebSocket client (PID: %d)..." % feishu_ws_process.pid)
             feishu_ws_process.terminate()
             feishu_ws_process.wait(timeout=5)
             logger.info("Feishu WebSocket client stopped")
