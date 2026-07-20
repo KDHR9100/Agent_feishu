@@ -1,8 +1,21 @@
-# Python
+.env
+*.log
 __pycache__/
 *.py[cod]
-*\.class
+*$py.class
 *.so
+.Python
+db.sqlite3
+db.sqlite3-journal
+media/
+static/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -20,35 +33,22 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# Test files
+test_feishu_*.py
+test_config.py
+fix_*.py
+create_test_*.py
+feishu_test_output.log
+
+# Database
+*.db
+*.sqlite3
+
+# Virtual environment
 venv/
 env/
 ENV/
-.venv/
-.env/
-
-# Environment variables / secrets
-.env
-.env.local
-.env.*.local
-*.env
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
 
 # Logs
+app.log
 *.log
-logs/
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Project specific
-*.pyc
-__pycache__/
