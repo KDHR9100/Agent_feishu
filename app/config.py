@@ -48,11 +48,15 @@ dictConfig({
 logger = logging.getLogger('app')
 
 class Config:
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-    OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
+    LLM_API_KEY = os.getenv("LLM_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+    LLM_API_BASE = os.getenv("LLM_API_BASE", "") or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+    LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "") or os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+
+    EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", "") or os.getenv("LLM_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+    EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", "") or os.getenv("LLM_API_BASE", "") or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+    EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v4")
 
     FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
     FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
@@ -64,6 +68,27 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     APP_PORT = int(os.getenv("APP_PORT", "8000"))
 
+    @property
+    def OPENAI_API_KEY(self):
+        return self.LLM_API_KEY
+
+    @property
+    def OPENAI_API_BASE(self):
+        return self.LLM_API_BASE
+
+    @property
+    def OPENAI_MODEL_NAME(self):
+        return self.LLM_MODEL_NAME
+
+    @property
+    def LLM_PROVIDER(self):
+        if "dashscope" in self.LLM_API_BASE.lower():
+            return "DashScope"
+        elif "openai" in self.LLM_API_BASE.lower():
+            return "OpenAI"
+        else:
+            return "Unknown"
+
 config = Config()
 
 _llm_instance = None
@@ -72,14 +97,15 @@ def get_llm():
     global _llm_instance
     if _llm_instance is None:
         from langchain_openai import ChatOpenAI
-        logger.info("Initializing LLM: %s" % config.OPENAI_MODEL_NAME)
+        logger.info("Initializing LLM: %s (Provider: %s)" % (config.LLM_MODEL_NAME, config.LLM_PROVIDER))
+        logger.info("API Base: %s" % config.LLM_API_BASE)
         try:
             _llm_instance = ChatOpenAI(
-                model=config.OPENAI_MODEL_NAME,
+                model=config.LLM_MODEL_NAME,
                 temperature=config.LLM_TEMPERATURE,
                 max_tokens=config.LLM_MAX_TOKENS,
-                api_key=config.OPENAI_API_KEY,
-                base_url=config.OPENAI_API_BASE,
+                api_key=config.LLM_API_KEY,
+                base_url=config.LLM_API_BASE,
             )
             logger.info("LLM initialized successfully")
         except Exception as e:
@@ -87,15 +113,35 @@ def get_llm():
             raise
     return _llm_instance
 
+def get_embeddings():
+    from langchain_openai import OpenAIEmbeddings
+    logger.info("Initializing Embeddings: %s (Provider: %s)" % (config.EMBEDDING_MODEL_NAME, config.LLM_PROVIDER))
+    try:
+        embeddings = OpenAIEmbeddings(
+            model=config.EMBEDDING_MODEL_NAME,
+            api_key=config.EMBEDDING_API_KEY,
+            base_url=config.EMBEDDING_API_BASE,
+        )
+        logger.info("Embeddings initialized successfully")
+        return embeddings
+    except Exception as e:
+        logger.error("Failed to initialize Embeddings: %s" % str(e))
+        raise
+
 def log_config_info():
     logger.info("=" * 60)
     logger.info("Application Configuration")
     logger.info("=" * 60)
-    logger.info("OpenAI API Key: %s" % ('***' if config.OPENAI_API_KEY else 'NOT SET'))
-    logger.info("OpenAI API Base: %s" % config.OPENAI_API_BASE)
-    logger.info("OpenAI Model: %s" % config.OPENAI_MODEL_NAME)
+    logger.info("LLM Provider: %s" % config.LLM_PROVIDER)
+    logger.info("LLM API Key: %s" % ('***' if config.LLM_API_KEY else 'NOT SET'))
+    logger.info("LLM API Base: %s" % config.LLM_API_BASE)
+    logger.info("LLM Model: %s" % config.LLM_MODEL_NAME)
     logger.info("LLM Temperature: %s" % config.LLM_TEMPERATURE)
     logger.info("LLM Max Tokens: %s" % config.LLM_MAX_TOKENS)
+    logger.info("-" * 60)
+    logger.info("Embedding Model: %s" % config.EMBEDDING_MODEL_NAME)
+    logger.info("Embedding API Key: %s" % ('***' if config.EMBEDDING_API_KEY else 'NOT SET'))
+    logger.info("Embedding API Base: %s" % config.EMBEDDING_API_BASE)
     logger.info("-" * 60)
     logger.info("Feishu App ID: %s" % ('***' if config.FEISHU_APP_ID else 'NOT SET'))
     logger.info("Feishu App Secret: %s" % ('***' if config.FEISHU_APP_SECRET else 'NOT SET'))
