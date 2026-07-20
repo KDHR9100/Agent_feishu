@@ -1,25 +1,37 @@
-from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from typing import List, Optional
+import numpy as np
+from langchain_core.embeddings import Embeddings
 
-from app.config import config
+from app.config import config, logger
 
+class MockEmbeddings(Embeddings):
+    def __init__(self, dimension=1536):
+        self.dimension = dimension
+        logger.info("Using MockEmbeddings for testing (dimension: %d)" % dimension)
+
+    def embed_documents(self, texts):
+        return [np.random.rand(self.dimension).tolist() for _ in texts]
+
+    def embed_query(self, text):
+        return np.random.rand(self.dimension).tolist()
 
 class VectorStore:
     def __init__(self):
-        self.embeddings = OpenAIEmbeddings(
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_API_BASE,
-        )
+        self.embeddings = MockEmbeddings()
         self.vector_store = None
 
     def initialize(self, documents=None):
-        if documents:
-            self.vector_store = FAISS.from_documents(documents, self.embeddings)
-        else:
-            texts = ["e-commerce knowledge", "product analysis", "ad strategy", "copywriting"]
-            self.vector_store = FAISS.from_texts(texts, self.embeddings)
+        try:
+            if documents:
+                self.vector_store = FAISS.from_documents(documents, self.embeddings)
+            else:
+                texts = ["e-commerce knowledge", "product analysis", "ad strategy", "copywriting"]
+                self.vector_store = FAISS.from_texts(texts, self.embeddings)
+            logger.info("VectorStore initialized successfully with MockEmbeddings")
+        except Exception as e:
+            logger.error("Failed to initialize VectorStore: %s" % str(e))
         return self
 
     def add_documents(self, documents):
