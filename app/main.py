@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from typing import Optional
 import logging
 import time
+import subprocess
+import sys
 
 from app.config import config, logger, log_config_info
 
@@ -38,7 +40,7 @@ async def chat(request: ChatRequest):
     try:
         logger.info("Received chat request: conversation_id=%s, use_coordinator=%s" % (request.conversation_id, request.use_coordinator))
         start_time = time.time()
-        
+
         if request.use_coordinator:
             from app.agents.coordinator import coordinator
             logger.debug("Using coordinator mode")
@@ -71,10 +73,10 @@ async def rag_query(request: RAGRequest):
     try:
         logger.info("Received RAG query: %s..." % request.query[:50])
         start_time = time.time()
-        
+
         from app.rag.retriever import rag_retriever
         result = rag_retriever.retrieve_and_generate(request.query)
-        
+
         logger.info("RAG response time: %.2fs" % (time.time() - start_time))
         return {
             "status": "success",
@@ -85,48 +87,52 @@ async def rag_query(request: RAGRequest):
         logger.error("RAG query error: %s" % str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+feishu_ws_process = None
+
 @app.on_event("startup")
 async def startup_event():
+    global feishu_ws_process
+    
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Starting...")
     logger.info("=" * 60)
-    
+
     log_config_info()
-    
+
     logger.info("Loading dependencies...")
-    
+
     try:
         logger.info("Loading agents module...")
         from app.agents.coordinator import coordinator
         logger.info("Agents module loaded successfully")
     except Exception as e:
         logger.error("Failed to load agents module: %s" % str(e), exc_info=True)
-    
+
     try:
         logger.info("Loading workflow module...")
         from app.agent.workflow import agent
         logger.info("Workflow module loaded successfully")
     except Exception as e:
         logger.error("Failed to load workflow module: %s" % str(e), exc_info=True)
-    
+
     try:
         logger.info("Loading RAG retriever (this may take a moment)...")
         import threading
         import queue
-        
+
         def load_rag(q):
             try:
                 from app.rag.retriever import rag_retriever
                 q.put(("success", "RAG retriever loaded successfully"))
             except Exception as e:
                 q.put(("error", str(e)))
-        
+
         q = queue.Queue()
         t = threading.Thread(target=load_rag, args=(q,))
         t.daemon = True
         t.start()
         t.join(timeout=30)
-        
+
         if t.is_alive():
             logger.warning("RAG retriever loading timed out (30s), skipping for now")
         else:
@@ -137,7 +143,7 @@ async def startup_event():
                 logger.error("Failed to load RAG retriever: %s" % msg)
     except Exception as e:
         logger.error("RAG loading error: %s" % str(e), exc_info=True)
-    
+
     try:
         logger.info("Loading Feishu router...")
         from app.api.feishu import router as feishu_router
@@ -145,7 +151,23 @@ async def startup_event():
         logger.info("Feishu router loaded successfully")
     except Exception as e:
         logger.error("Failed to load Feishu router: %s" % str(e), exc_info=True)
-    
+
+    try:
+        logger.info("Starting Feishu WebSocket client...")
+        if config.FEISHU_APP_ID and config.FEISHU_APP_SECRET:
+            feishu_ws_process = subprocess.Popen(
+                [sys.executable, "-m", "app.tools.feishu_ws", 
+                 config.FEISHU_APP_ID, config.FEISHU_APP_SECRET],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            logger.info("Feishu WebSocket client started in separate process (PID: %d)" % feishu_ws_process.pid)
+        else:
+            logger.warning("Feishu credentials not configured, skipping WS client")
+    except Exception as e:
+        logger.error("Failed to start Feishu WebSocket client: %s" % str(e), exc_info=True)
+
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Started Successfully")
     logger.info("Service will be available at: http://localhost:%s" % config.APP_PORT)
@@ -153,9 +175,20 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    global feishu_ws_process
+    
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Shutting Down...")
     logger.info("=" * 60)
+    
+    if feishu_ws_process:
+        try:
+            logger.info("Stopping Feishu WebSocket client (PID: %d)...", feishu_ws_process.pid)
+            feishu_ws_process.terminate()
+            feishu_ws_process.wait(timeout=5)
+            logger.info("Feishu WebSocket client stopped")
+        except Exception as e:
+            logger.error("Failed to stop Feishu WS client: %s" % str(e), exc_info=True)
 
 if __name__ == "__main__":
     import uvicorn
