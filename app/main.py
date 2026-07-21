@@ -226,4 +226,4 @@ async def shutdown_event():
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting uvicorn server on port %s" % config.APP_PORT)
-    uvicorn.run(app, host="0.0.0.0", port=config.APP_PORT, log_level=config.LOG_LEVEL.lower())
+    uvicorn.run(app, host="127.0.0.1", port=config.APP_PORT, log_level=config.LOG_LEVEL.lower())

@@ -4,28 +4,22 @@ from typing import Optional
 import json
 import logging
 
-
 from app.agents.coordinator import coordinator
 from app.agent.workflow import agent
 from app.tools.feishu_tool import feishu_tool
 
-
 logger = logging.getLogger(__name__)
-
 
 router = APIRouter(
     prefix="/feishu",
     tags=["feishu"]
 )
 
-
 class MessageRequest(BaseModel):
     chat_id: str
     content: str
     user_id: Optional[str] = None
     message_type: str = "text"
-
-
 
 @router.post("/webhook")
 async def feishu_webhook(request: Request):
@@ -34,7 +28,6 @@ async def feishu_webhook(request: Request):
 
         body = await request.json()
 
-
         logger.info(
             "Feishu webhook received: %s",
             json.dumps(
@@ -42,7 +35,6 @@ async def feishu_webhook(request: Request):
                 ensure_ascii=False
             )
         )
-
 
         # ==================================
         # 1. 飞书首次验证
@@ -55,8 +47,6 @@ async def feishu_webhook(request: Request):
                 body.get("challenge")
             }
 
-
-
         # ==================================
         # 2. 判断事件类型
         # ==================================
@@ -66,18 +56,14 @@ async def feishu_webhook(request: Request):
             {}
         )
 
-
         event_type = header.get(
             "event_type"
         )
-
 
         logger.info(
             "event_type=%s",
             event_type
         )
-
-
 
         if event_type != "im.message.receive_v1":
 
@@ -85,8 +71,6 @@ async def feishu_webhook(request: Request):
                 "status": "ignored",
                 "event_type": event_type
             }
-
-
 
         # ==================================
         # 3. 解析消息
@@ -97,18 +81,15 @@ async def feishu_webhook(request: Request):
             {}
         )
 
-
         message = event.get(
             "message",
             {}
         )
 
-
         content_raw = message.get(
             "content",
             "{}"
         )
-
 
         try:
 
@@ -125,27 +106,21 @@ async def feishu_webhook(request: Request):
 
             content = ""
 
-
-
         chat_id = message.get(
             "chat_id",
             ""
         )
-
 
         sender = event.get(
             "sender",
             {}
         )
 
-
         user_id = (
             sender
             .get("sender_id", {})
             .get("user_id", "")
         )
-
-
 
         logger.info(
             "User=%s Chat=%s Message=%s",
@@ -154,8 +129,6 @@ async def feishu_webhook(request: Request):
             content
         )
 
-
-
         if not content:
 
             raise HTTPException(
@@ -163,31 +136,23 @@ async def feishu_webhook(request: Request):
                 detail="Empty message"
             )
 
-
-
         # ==================================
         # 4. 调用 Agent
         # ==================================
 
-
         result = coordinator.route_and_coordinate(
             content
         )
-
 
         answer = result.get(
             "summary",
             str(result)
         )
 
-
-
         logger.info(
             "Agent answer=%s",
             answer
         )
-
-
 
         # ==================================
         # 5. 回复飞书
@@ -199,7 +164,6 @@ async def feishu_webhook(request: Request):
             and chat_id
         ):
 
-
             send_result = (
                 feishu_tool.send_message(
                     chat_id,
@@ -207,20 +171,16 @@ async def feishu_webhook(request: Request):
                 )
             )
 
-
             logger.info(
                 "Feishu send result=%s",
                 send_result
             )
-
 
         else:
 
             logger.warning(
                 "Feishu credentials missing"
             )
-
-
 
         return {
 
@@ -232,23 +192,16 @@ async def feishu_webhook(request: Request):
 
         }
 
-
-
     except Exception as e:
-
 
         logger.exception(
             "Feishu webhook failed"
         )
 
-
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
-
-
-
 
 @router.post("/message")
 async def send_message(
@@ -262,14 +215,12 @@ async def send_message(
             and feishu_tool.app_secret
         ):
 
-
             result = (
                 feishu_tool.send_message(
                     request.chat_id,
                     request.content
                 )
             )
-
 
             return {
 
@@ -281,8 +232,6 @@ async def send_message(
 
             }
 
-
-
         return {
 
             "status":
@@ -293,18 +242,12 @@ async def send_message(
 
         }
 
-
-
     except Exception as e:
-
 
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
-
-
-
 
 @router.post("/chat")
 async def chat_with_agent(
@@ -315,18 +258,15 @@ async def chat_with_agent(
 
         body = await request.json()
 
-
         user_input = body.get(
             "message",
             ""
         )
 
-
         conversation_id = body.get(
             "conversation_id",
             "default"
         )
-
 
         if not user_input:
 
@@ -334,8 +274,6 @@ async def chat_with_agent(
                 status_code=400,
                 detail="Message is required"
             )
-
-
 
         result = agent.invoke(
             {
@@ -346,8 +284,6 @@ async def chat_with_agent(
                 conversation_id
             }
         )
-
-
 
         return {
 
@@ -365,10 +301,7 @@ async def chat_with_agent(
 
         }
 
-
-
     except Exception as e:
-
 
         raise HTTPException(
             status_code=500,
