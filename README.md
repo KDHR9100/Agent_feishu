@@ -1,400 +1,113 @@
-# Feishu E-commerce Agent
+﻿# Feishu E-commerce Agent
 
-基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务。
-
-该项目目标是探索企业级 Agent 在电商运营场景中的应用，通过 Agent Workflow 编排不同业务 Skill，并通过 Tool 调用完成商品分析、广告分析、营销内容生成等任务。
-
-当前版本实现了 Agent 服务化部署、任务路由和 Skill 模块化设计。
-
----
+基于 LangChain + FastAPI 构建的电商运营智能 Agent 服务，支持飞书消息接入、文件解析、库存预警、竞品分析等功能。
 
 ## 1. 项目背景
 
-在电商运营过程中，运营人员通常需要频繁完成：
-
-- 商品销售数据分析
-- 广告投放效果分析
-- 营销内容生成
-- 活动策略制定
-
-传统方式需要人工查询多个系统并进行分析，效率较低。
-
-本项目尝试构建一个面向电商运营场景的 Agent：
-
-用户通过自然语言提出需求，Agent 自动判断任务类型，选择对应 Skill，并调用业务工具完成任务。
-
----
+在电商运营过程中，运营人员通常需要频繁完成商品销售数据分析、广告投放效果分析、营销内容生成、库存管理、竞品分析等任务。本项目构建了一个面向电商运营场景的智能 Agent，用户通过自然语言提出需求，Agent 自动判断任务类型，选择对应 Skill，并调用业务工具完成任务。
 
 ## 2. 项目架构
 
-当前版本架构：
-
-```
-                User
-
-                 |
-                 |
-
-            FastAPI API
-
-                 |
-                 |
-
-          LangGraph Workflow
-
-                 |
-                 |
-
-              Router
-
-        /        |        \
-
-       /         |         \
-
- 商品分析Skill  广告分析Skill  内容生成Skill
-
-       |          |          |
-
- Product Tool  Ads Tool  Content Tool
-
-                 |
-
-              Result
-
-```
-
----
+User (Feishu) -> FastAPI API层 -> Agent Router -> Skills层 -> Tools层 -> LLM分析报告
 
 ## 3. 核心技术栈
 
-### Agent Framework
+- LangChain - Agent编排、工具调用、RAG
+- FastAPI + Uvicorn - HTTP接口、服务化部署
+- SQLite + SQLAlchemy - 数据存储、库存管理
+- pandas, openpyxl, xlrd - Excel/CSV解析
+- PyPDF2, python-docx - PDF/Word解析
+- APScheduler - 库存监控、定时报告
+- FAISS - RAG知识库
+- 飞书Open API - 消息接收、文件下载
 
-- LangGraph
-- LangChain
+## 4. 功能特性
 
-用于：
+### 4.1 文件解析与数据分析
 
-- Agent Workflow编排
-- 状态管理
-- 节点调度
+支持CSV、Excel(.xlsx/.xls)、PDF、Word、飞书文档等多种格式。
 
+使用示例：分析这个表格 message_id: xxx file_token: yyy file_name: sales_report.xlsx
 
-### Backend
+### 4.2 库存预警系统
 
-- FastAPI
-- Uvicorn
+- 阈值配置 - 按商品类别设置不同预警阈值
+- 紧急程度分级 - critical(0库存)、high(低于30%)、medium(低于阈值)
+- 定时监控 - 自动检测库存状态
+- 飞书通知 - 通过飞书自动发送预警消息
 
-用于：
+### 4.3 商品分析、广告分析、营销内容生成
 
-- 提供HTTP接口
-- 服务化部署Agent
+分析商品销售数据、广告投放效果、生成营销文案。
 
+### 4.4 竞品分析、SEO优化、智能客服
 
-### Development Environment
+监控竞品动态、关键词分析、订单查询等。
 
-- Python 3.11
-- Conda
-
-
----
-
-# 4. 当前实现功能
-
-
-## 4.1 Agent Workflow
-
-基于 LangGraph 构建任务执行流程：
-
-```
-User Input
-
-↓
-
-Router
-
-↓
-
-Skill Selection
-
-↓
-
-Tool Execution
-
-↓
-
-Generate Response
-
-```
-
----
-
-## 4.2 Skill模块
-
-目前实现三个业务Skill：
-
-### 商品分析 Skill
-
-示例：
-
-```
-分析商品销量下降
-```
-
-输出：
-
-```json
-{
-    "sku":"SKU10086",
-    "sales_change":"-20%",
-    "ad_roi":"1.2",
-    "rating":"3.8"
-}
-
-```
-
-
----
-
-### 广告分析 Skill
-
-示例：
-
-```
-分析广告ROI
-```
-
-输出：
-
-```json
-{
-    "ROI":"1.8",
-    "cost":"下降15%",
-    "suggestion":"优化投放素材"
-}
-
-```
-
-
----
-
-### 内容生成 Skill
-
-示例：
-
-```
-生成618营销文案
-```
-
-输出：
-
-```json
-{
-    "copy":"618大促，新品限时优惠"
-}
-
-```
-
----
-
-# 5. 项目结构
-
+## 5. 项目结构
 
 ```
 Agent_feishu/
-
 ├── app/
-
-│
-├── main.py                 # FastAPI入口
-
-│
-├── agent/
-
-│   ├── state.py            # Agent状态定义
-
-│   ├── workflow.py         # LangGraph Workflow
-
-│   └── router.py           # 任务路由
-
-│
-├── skills/
-
-│   ├── product_skill.py    # 商品分析Skill
-
-│   ├── ads_skill.py        # 广告分析Skill
-
-│   └── content_skill.py    # 内容生成Skill
-
-│
-├── tools/
-
-│   └── product.py          # 商品数据工具
-
-│
+│   ├── agent/              # Agent核心模块
+│   ├── agents/             # 专业Agent
+│   ├── api/                # API接口
+│   ├── skills/             # 业务技能
+│   ├── tools/              # 工具模块
+│   ├── rag/                # RAG知识库
+│   ├── memory/             # 记忆模块
+│   ├── monitoring/         # 监控统计
+│   ├── models/             # 数据模型
+│   ├── tasks/              # 定时任务
+│   ├── config.py           # 配置管理
+│   ├── prompts.py          # Prompt模板
+│   └── main.py             # FastAPI入口
+├── data/                   # 数据目录
+├── scripts/                # 脚本
+├── tests/                  # 测试用例
+├── .env                    # 环境变量
+├── .env.example            # 环境变量示例
+├── requirements.txt        # 依赖列表
 └── README.md
-
 ```
 
----
+## 6. 快速开始
 
-# 6. Quick Start
+### 6.1 创建环境
 
-
-## 6.1 创建环境
-
-
-```bash
 conda create -n feishuagent python=3.11
-
 conda activate feishuagent
 
-```
+### 6.2 安装依赖
 
+pip install -r requirements.txt
 
----
+### 6.3 配置环境变量
 
-## 6.2 安装依赖
+cp .env.example .env
 
+### 6.4 启动服务
 
-```bash
-pip install langgraph langchain fastapi uvicorn
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
-```
+## 7. API接口
 
+- POST /chat - 聊天接口
+- GET /health - 健康检查
+- POST /feishu/webhook - 飞书Webhook
 
----
+## 8. 飞书开放平台配置
 
-## 6.3 启动服务
+1. 访问 https://open.feishu.cn/app 创建企业自建应用
+2. 添加权限：docx:document:readonly, im:message:readonly, im:resource:readonly, im:message:send_as_bot
+3. 配置事件订阅
+4. 发布应用
 
+## 9. 测试验证
 
-```bash
-uvicorn app.main:app --reload
+python tests/test_llm_simple.py
+python tests/test_inventory.py
 
-```
-
-
-启动成功：
-
-```
-Uvicorn running on http://127.0.0.1:8000
-
-```
-
-
----
-
-# 7. API调用
-
-
-打开：
-
-```
-http://127.0.0.1:8000/docs
-```
-
-
-请求：
-
-```
-POST /chat
-```
-
-
-参数：
-
-```
-message:
-
-分析商品销量下降
-
-```
-
-
-返回：
-
-```json
-{
- "answer":
- "商品分析..."
-}
-
-```
-
----
-
-# 8. Roadmap
-
-
-## Phase 1 ✅
-
-基础 Agent Workflow
-
-- [x] FastAPI服务
-- [x] LangGraph Workflow
-- [x] Router
-- [x] Skill模块化
-- [x] Tool调用
-
-
-## Phase 2 🚧
-
-智能化升级
-
-- [ ] LLM Router
-- [ ] Function Calling
-- [ ] 多Agent协作
-- [ ] Prompt模板管理
-
-
-## Phase 3
-
-企业化能力
-
-- [ ] 飞书Bot接入
-- [ ] 飞书Open API Tool
-- [ ] RAG知识库
-- [ ] Redis Memory
-- [ ] Agent Evaluation
-
-
-## Phase 4
-
-生产部署
-
-- [ ] Docker
-- [ ] 日志追踪
-- [ ] API鉴权
-- [ ] Kubernetes部署
-
-
----
-
-# 9. Future Vision
-
-最终目标：
-
-构建一个面向电商运营团队的企业级 Agent。
-
-用户通过飞书输入自然语言任务：
-
-例如：
-
-```
-分析最近7天销量下降商品，并生成优化建议
-
-```
-
-Agent自动：
-
-1. 理解任务
-2. 查询业务数据
-3. 调用对应工具
-4. 生成分析报告
-5. 返回飞书消息或文档
-
-
----
-
-# License
+## 10. License
 
 MIT License
