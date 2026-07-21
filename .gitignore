@@ -52,3 +52,4 @@ ENV/
 # Logs
 app.log
 *.log
+.tree

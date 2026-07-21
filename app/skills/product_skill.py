@@ -9,9 +9,7 @@ from app.tools.database_tool import db_tool
 
 def extract_sku_from_input(user_input: str) -> Optional[str]:
     patterns = [
-        r'SKU\s*[:]?\s*(\w+)',
-        r'SKU\s+(\w+)',
-        r'(\w{4,})',
+    r'SKU\s*[:]?\s*([A-Za-z0-9_-]+)',
     ]
     for pattern in patterns:
         match = re.search(pattern, user_input)
