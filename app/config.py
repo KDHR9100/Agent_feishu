@@ -1,4 +1,4 @@
-from dotenv import load_dotenv
+﻿from dotenv import load_dotenv
 import os
 import logging
 from logging.config import dictConfig
@@ -58,6 +58,9 @@ class Config:
     EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", "") or os.getenv("LLM_API_BASE", "") or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
     EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v4")
 
+    USE_LOCAL_EMBEDDING = os.getenv("USE_LOCAL_EMBEDDING", "true").lower() == "true"
+    LOCAL_EMBEDDING_MODEL = os.getenv("LOCAL_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+
     FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
     FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
     FEISHU_BOT_NAME = os.getenv("FEISHU_BOT_NAME", "Ecommerce Agent")
@@ -114,19 +117,38 @@ def get_llm():
     return _llm_instance
 
 def get_embeddings():
-    from langchain_openai import OpenAIEmbeddings
-    logger.info("Initializing Embeddings: %s (Provider: %s)" % (config.EMBEDDING_MODEL_NAME, config.LLM_PROVIDER))
-    try:
-        embeddings = OpenAIEmbeddings(
-            model=config.EMBEDDING_MODEL_NAME,
-            api_key=config.EMBEDDING_API_KEY,
-            base_url=config.EMBEDDING_API_BASE,
-        )
-        logger.info("Embeddings initialized successfully")
+    if config.USE_LOCAL_EMBEDDING:
+        logger.info("Initializing local Embeddings: %s" % config.LOCAL_EMBEDDING_MODEL)
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings
+            embeddings = HuggingFaceEmbeddings(
+                model_name=config.LOCAL_EMBEDDING_MODEL,
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True}
+            )
+        except ImportError:
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+            embeddings = HuggingFaceEmbeddings(
+                model_name=config.LOCAL_EMBEDDING_MODEL,
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True}
+            )
+        logger.info("Local Embeddings initialized successfully")
         return embeddings
-    except Exception as e:
-        logger.error("Failed to initialize Embeddings: %s" % str(e))
-        raise
+    else:
+        from langchain_openai import OpenAIEmbeddings
+        logger.info("Initializing Embeddings: %s (Provider: %s)" % (config.EMBEDDING_MODEL_NAME, config.LLM_PROVIDER))
+        try:
+            embeddings = OpenAIEmbeddings(
+                model=config.EMBEDDING_MODEL_NAME,
+                api_key=config.EMBEDDING_API_KEY,
+                base_url=config.EMBEDDING_API_BASE,
+            )
+            logger.info("Embeddings initialized successfully")
+            return embeddings
+        except Exception as e:
+            logger.error("Failed to initialize Embeddings: %s" % str(e))
+            raise
 
 def log_config_info():
     logger.info("=" * 60)
@@ -139,6 +161,8 @@ def log_config_info():
     logger.info("LLM Temperature: %s" % config.LLM_TEMPERATURE)
     logger.info("LLM Max Tokens: %s" % config.LLM_MAX_TOKENS)
     logger.info("-" * 60)
+    logger.info("Use Local Embedding: %s" % config.USE_LOCAL_EMBEDDING)
+    logger.info("Local Embedding Model: %s" % config.LOCAL_EMBEDDING_MODEL)
     logger.info("Embedding Model: %s" % config.EMBEDDING_MODEL_NAME)
     logger.info("Embedding API Key: %s" % ('***' if config.EMBEDDING_API_KEY else 'NOT SET'))
     logger.info("Embedding API Base: %s" % config.EMBEDDING_API_BASE)

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+﻿from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 from app.config import config, logger, log_config_info
+from app.monitoring import monitoring_stats
 
 app = FastAPI(title="Ecommerce Agent", version="1.0.0")
 
@@ -33,7 +34,15 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    return monitoring_stats.get_health_status()
+
+@app.get("/health/details")
+async def health_check_details():
+    return monitoring_stats.get_health_status()
+
+@app.get("/health/jingang")
+async def jingang_consumption():
+    return monitoring_stats.get_jingang_consumption()
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
@@ -45,7 +54,9 @@ async def chat(request: ChatRequest):
             from app.agents.coordinator import coordinator
             logger.debug("Using coordinator mode")
             result = coordinator.route_and_coordinate(request.message)
-            logger.info("Coordinator response time: %.2fs" % (time.time() - start_time))
+            duration = time.time() - start_time
+            monitoring_stats.record_skill_call("coordinator", duration)
+            logger.info("Coordinator response time: %.2fs" % duration)
             return {
                 "status": "success",
                 "answer": result.get("summary", str(result)),
@@ -58,14 +69,23 @@ async def chat(request: ChatRequest):
                 "user_input": request.message,
                 "conversation_id": request.conversation_id
             })
-            logger.info("Workflow response time: %.2fs" % (time.time() - start_time))
+            duration = time.time() - start_time
+            monitoring_stats.record_skill_call("workflow", duration)
+            if "intent" in result:
+                monitoring_stats.record_intent(result["intent"])
+            if "token_usage" in result:
+                monitoring_stats.record_llm_call(duration, token_usage=result["token_usage"])
+            logger.info("Workflow response time: %.2fs" % duration)
             return {
                 "status": "success",
                 "answer": result.get("answer", ""),
-                "conversation_id": request.conversation_id
+                "conversation_id": request.conversation_id,
+                "intent": result.get("intent"),
+                "token_usage": result.get("token_usage")
             }
     except Exception as e:
         logger.error("Chat error: %s" % str(e), exc_info=True)
+        monitoring_stats.record_skill_call("chat", 0, success=False)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/rag/query")
@@ -77,7 +97,9 @@ async def rag_query(request: RAGRequest):
         from app.rag.retriever import rag_retriever
         result = rag_retriever.retrieve_and_generate(request.query)
 
-        logger.info("RAG response time: %.2fs" % (time.time() - start_time))
+        duration = time.time() - start_time
+        monitoring_stats.record_rag_query(duration)
+        logger.info("RAG response time: %.2fs" % duration)
         return {
             "status": "success",
             "answer": result.get("answer", ""),
@@ -85,6 +107,7 @@ async def rag_query(request: RAGRequest):
         }
     except Exception as e:
         logger.error("RAG query error: %s" % str(e), exc_info=True)
+        monitoring_stats.record_rag_query(0, success=False)
         raise HTTPException(status_code=500, detail=str(e))
 
 feishu_ws_process = None
@@ -100,6 +123,14 @@ async def startup_event():
     log_config_info()
 
     logger.info("Loading dependencies...")
+
+    try:
+        logger.info("Initializing database...")
+        from app.models import init_db
+        init_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error("Failed to initialize database: %s" % str(e), exc_info=True)
 
     try:
         logger.info("Loading agents module...")
@@ -122,6 +153,8 @@ async def startup_event():
 
         def load_rag(q):
             try:
+                from app.rag.vectorstore import vector_store
+                vector_store.initialize()
                 from app.rag.retriever import rag_retriever
                 q.put(("success", "RAG retriever loaded successfully"))
             except Exception as e:
@@ -158,8 +191,8 @@ async def startup_event():
             feishu_ws_process = subprocess.Popen(
                 [sys.executable, "-m", "app.tools.feishu_ws",
                  config.FEISHU_APP_ID, config.FEISHU_APP_SECRET],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=None,
+                stderr=None,
                 text=True
             )
             logger.info("Feishu WebSocket client started in separate process (PID: %d)" % feishu_ws_process.pid)
