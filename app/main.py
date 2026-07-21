@@ -164,10 +164,10 @@ async def startup_event():
         t = threading.Thread(target=load_rag, args=(q,))
         t.daemon = True
         t.start()
-        t.join(timeout=30)
+        t.join(timeout=180)
 
         if t.is_alive():
-            logger.warning("RAG retriever loading timed out (30s), skipping for now")
+            logger.warning("RAG retriever loading timed out (180s), skipping for now")
         else:
             status, msg = q.get()
             if status == "success":
