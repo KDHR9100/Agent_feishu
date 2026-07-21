@@ -1,12 +1,13 @@
-from langchain_core.messages import HumanMessage, SystemMessage
+﻿from langchain_core.messages import HumanMessage, SystemMessage
 import datetime
+from typing import Optional
 
 from app.config import get_llm
 from app.prompts import SUMMARIZATION_PROMPT
 from app.tools.file_tool import file_tool
 
 
-def report_skill(user_input: str, tool_result: dict = None):
+def report_skill(user_input: str, tool_result: Optional[dict] = None):
     llm = get_llm()
     
     prompt = SUMMARIZATION_PROMPT.format(
@@ -21,17 +22,7 @@ def report_skill(user_input: str, tool_result: dict = None):
     
     summary = llm.invoke(messages).content
     
-    report_content = '# E-commerce Operation Analysis Report
-
-## User Request
-' + user_input + '
-
-## Analysis Result
-' + summary + '
-
-## Generated Time
-' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '
-'
+    report_content = '# E-commerce Operation Analysis Report\n\n## User Request\n' + user_input + '\n\n## Analysis Result\n' + summary + '\n\n## Generated Time\n' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '\n'
     
     file_result = file_tool.write_file(
         'reports/report_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + '.md',

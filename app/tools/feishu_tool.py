@@ -9,10 +9,10 @@ class FeishuTool:
     def __init__(self, app_id: str = "", app_secret: str = ""):
         self.app_id = app_id
         self.app_secret = app_secret
-        self.access_token = None
-        self.token_expire_time = 0
+        self.access_token: Optional[str] = None
+        self.token_expire_time: float = 0.0
 
-    def get_access_token(self) -> str:
+    def get_access_token(self) -> Optional[str]:
         """Get tenant_access_token with caching"""
         if not self.app_id or not self.app_secret:
             logger.error("[FeishuTool] App ID or App Secret not configured")
@@ -34,7 +34,7 @@ class FeishuTool:
                 data = response.json()
                 if data.get("code") == 0:
                     self.access_token = data.get("tenant_access_token")
-                    self.token_expire_time = time.time() + 7000
+                    self.token_expire_time = time.time() + 7000.0
                     logger.info("[FeishuTool] Access token obtained successfully")
                     return self.access_token
                 else:
