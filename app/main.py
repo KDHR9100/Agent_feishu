@@ -190,7 +190,8 @@ async def startup_event():
         if config.FEISHU_APP_ID and config.FEISHU_APP_SECRET:
             feishu_ws_process = subprocess.Popen(
                 [sys.executable, "-m", "app.tools.feishu_ws",
-                 config.FEISHU_APP_ID, config.FEISHU_APP_SECRET],
+                 config.FEISHU_APP_ID, config.FEISHU_APP_SECRET,
+                   config.FEISHU_ENCRYPT_KEY, config.FEISHU_WEBHOOK_SECRET],
                 stdout=None,
                 stderr=None,
                 text=True

@@ -1,4 +1,4 @@
-﻿from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain_core.embeddings import Embeddings
 
 import os
