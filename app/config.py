@@ -65,6 +65,7 @@ class Config:
     FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
     FEISHU_BOT_NAME = os.getenv("FEISHU_BOT_NAME", "Ecommerce Agent")
     FEISHU_WEBHOOK_SECRET = os.getenv("FEISHU_WEBHOOK_SECRET", "")
+    FEISHU_ENCRYPT_KEY = os.getenv("FEISHU_ENCRYPT_KEY", "")
 
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./feishu_agent.db")
 

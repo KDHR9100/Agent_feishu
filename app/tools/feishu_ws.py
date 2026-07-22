@@ -33,21 +33,39 @@ def do_p2_im_message_receive_v1(data):
         sender = event_dict.get("event", {}).get("sender", {})
         message_id = message.get("message_id", "")
         chat_id = message.get("chat_id", "")
+        msg_type = message.get("msg_type", "text")
         content_raw = message.get("content", "{}")
         mentions = message.get("mentions", [])
         sender_id = sender.get("sender_id", {}).get("open_id", "")
-        try:
-            text_content = json.loads(content_raw).get("text", "")
-        except:
-            text_content = ""
-        if mentions:
-            for mention in mentions:
-                key = mention.get("key", "")
-                if key:
-                    text_content = text_content.replace(key, "").strip()
+        
+        text_content = ""
+        file_info = None
+        
+        if msg_type == "text":
+            try:
+                text_content = json.loads(content_raw).get("text", "")
+            except:
+                text_content = ""
+            if mentions:
+                for mention in mentions:
+                    key = mention.get("key", "")
+                    if key:
+                        text_content = text_content.replace(key, "").strip()
+        elif msg_type == "file":
+            try:
+                content_json = json.loads(content_raw)
+                file_key = content_json.get("file_key", "")
+                file_name = content_json.get("file_name", "unknown")
+                file_size = content_json.get("file_size", 0)
+                file_info = {"file_key": file_key, "file_name": file_name, "file_size": file_size}
+                text_content = f"[文件] {file_name}"
+                logger.info("[Feishu WS] [%s] File received - Key: %s, Name: %s, Size: %d" % (track_id, file_key, file_name, file_size))
+            except Exception as e:
+                text_content = "[文件] 无法解析"
+                logger.error("[Feishu WS] [%s] Failed to parse file message: %s" % (track_id, str(e)))
         parse_time = time.time() - start_time
-        logger.info("[Feishu WS] [%s] Received - SenderID: %s, MessageID: %s, Content: %s" % (
-            track_id, sender_id, message_id, text_content[:100] + "..." if len(text_content) > 100 else text_content))
+        logger.info("[Feishu WS] [%s] Received - Type: %s, SenderID: %s, MessageID: %s, Content: %s" % (
+            track_id, msg_type, sender_id, message_id, text_content[:100] + "..." if len(text_content) > 100 else text_content))
         logger.info("[Feishu WS] [%s] Parsed in %.2fms" % (track_id, parse_time*1000))
         message_queue.put({
             "track_id": track_id,
@@ -55,7 +73,9 @@ def do_p2_im_message_receive_v1(data):
             "chat_id": chat_id,
             "content": text_content,
             "sender_id": sender_id,
-            "receive_time": start_time
+            "receive_time": start_time,
+            "msg_type": msg_type,
+            "file_info": file_info
         })
         logger.info("[Feishu WS] [%s] Queued" % track_id)
     except Exception as e:

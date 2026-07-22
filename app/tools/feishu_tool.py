@@ -1,6 +1,7 @@
 import requests
 import time
 import json
+import os
 from app.config import config, logger
 from typing import Optional, Dict, Any
 
@@ -142,6 +143,41 @@ class FeishuTool:
             return response.json()
         except Exception as e:
             logger.error("[FeishuTool] Failed to get user info: %s" % str(e))
+            return {"error": str(e)}
+
+    def download_file(self, file_key: str, save_path: str) -> Dict[str, Any]:
+        """Download file from Feishu"""
+        token = self.get_access_token()
+        if not token:
+            return {"error": "Failed to get access token"}
+
+        url = "https://open.feishu.cn/open-apis/drive/v1/medias/%s/download" % file_key
+        headers = {"Authorization": "Bearer %s" % token}
+
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0:
+                    download_url = data.get("data", {}).get("download_url", "")
+                    if download_url:
+                        file_response = requests.get(download_url, timeout=60)
+                        if file_response.status_code == 200:
+                            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                            with open(save_path, "wb") as f:
+                                f.write(file_response.content)
+                            logger.info("[FeishuTool] File downloaded successfully: %s" % save_path)
+                            return {"success": True, "path": save_path}
+                        else:
+                            return {"error": "Failed to download file, HTTP %d" % file_response.status_code}
+                    else:
+                        return {"error": "No download URL found"}
+                else:
+                    return {"error": data.get("msg", "Unknown error")}
+            else:
+                return {"error": "HTTP error: %d" % response.status_code}
+        except Exception as e:
+            logger.error("[FeishuTool] Failed to download file: %s" % str(e))
             return {"error": str(e)}
 
 
