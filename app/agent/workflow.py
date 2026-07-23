@@ -38,6 +38,61 @@ def save_history(state):
     return state
 
 
+def load_file(state):
+    """解析上传的文件，将内容存入 state['file_content']"""
+    file_path = state.get("file_path")
+    if not file_path:
+        return state
+
+    try:
+        from app.tools.file_parser_tool import file_parser_tool
+        import os
+
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            logger.warning("[Workflow] File not found: %s" % file_path)
+            state["file_content"] = None
+            return state
+
+        # 使用 file_parser_tool 解析文件
+        result = file_parser_tool.parse_local_file(file_path)
+        if result.get("error"):
+            logger.error("[Workflow] File parse error: %s" % result.get("error"))
+            state["file_content"] = None
+        else:
+            # 将解析结果格式化为文本，方便后续 LLM 使用
+            summary = result.get("summary", {})
+            columns = result.get("columns", [])
+            row_count = result.get("row_count", 0)
+            sample_rows = result.get("sample_rows", [])
+
+            content_parts = [
+                f"文件信息: {file_path}",
+                f"列: {', '.join(columns)}",
+                f"行数: {row_count}",
+                "数据摘要:"
+            ]
+            for col, info in summary.items():
+                if info.get("type") == "numeric":
+                    content_parts.append(f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}")
+                else:
+                    content_parts.append(f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}")
+
+            if sample_rows:
+                content_parts.append("数据样例 (前3行):")
+                for i, row in enumerate(sample_rows):
+                    content_parts.append(f"  第{i+1}行: {row}")
+
+            state["file_content"] = "\n".join(content_parts)
+            logger.info("[Workflow] File parsed successfully: %s, %d rows, %d columns" % (file_path, row_count, len(columns)))
+
+    except Exception as e:
+        logger.error("[Workflow] Failed to parse file: %s" % str(e))
+        state["file_content"] = None
+
+    return state
+
+
 @timeout(30)
 def _call_llm(llm, messages):
     return llm.invoke(messages)
@@ -66,6 +121,15 @@ def skill_executor(state):
         from app.skills.help_skill import help_skill
         result = help_skill(user_input)
         monitoring_stats.record_skill_call("help_skill", time.time() - skill_start)
+    # ============================================================
+    # 新增：文件解析技能分支
+    # ============================================================
+    elif skill == "file_analysis_skill":
+        from app.skills.file_analysis_skill import file_analysis_skill
+        file_path = tool_result.get("file_path")
+        file_content = tool_result.get("file_content") or state.get("file_content")
+        result = file_analysis_skill(user_input, file_path, file_content)
+        monitoring_stats.record_skill_call("file_analysis_skill", time.time() - skill_start)
     else:
         llm = get_llm()
         system_msg = SystemMessage(content=(
@@ -125,13 +189,15 @@ def answer_node(state):
 graph = StateGraph(AgentState)
 
 graph.add_node("load_history", load_history)
+graph.add_node("load_file", load_file)      # 新增：文件解析节点
 graph.add_node("router", router)
 graph.add_node("skill_executor", skill_executor)
 graph.add_node("answer", answer_node)
 graph.add_node("save_history", save_history)
 
 graph.set_entry_point("load_history")
-graph.add_edge("load_history", "router")
+graph.add_edge("load_history", "load_file")   # 先加载文件再路由
+graph.add_edge("load_file", "router")
 graph.add_edge("router", "skill_executor")
 graph.add_edge("skill_executor", "answer")
 graph.add_edge("answer", "save_history")

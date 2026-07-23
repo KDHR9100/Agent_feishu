@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -177,13 +177,14 @@ async def startup_event():
     except Exception as e:
         logger.error("RAG loading error: %s" % str(e), exc_info=True)
 
-    try:
-        logger.info("Loading Feishu router...")
-        from app.api.feishu import router as feishu_router
-        app.include_router(feishu_router)
-        logger.info("Feishu router loaded successfully")
-    except Exception as e:
-        logger.error("Failed to load Feishu router: %s" % str(e), exc_info=True)
+    # try:
+    # Webhook router disabled (switched to WebSocket long connection)
+    #         logger.info("Loading Feishu router...")
+    #         from app.api.feishu import router as feishu_router
+    #         app.include_router(feishu_router)
+    #         logger.info("Feishu router loaded successfully")
+    #     except Exception as e:
+    #         logger.error("Failed to load Feishu router: %s" % str(e), exc_info=True)
 
     try:
         logger.info("Starting Feishu WebSocket client...")
