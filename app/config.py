@@ -1,4 +1,4 @@
-﻿from dotenv import load_dotenv
+from dotenv import load_dotenv
 import os
 import logging
 from logging.config import dictConfig
@@ -49,13 +49,13 @@ logger = logging.getLogger('app')
 
 class Config:
     LLM_API_KEY = os.getenv("LLM_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
-    LLM_API_BASE = os.getenv("LLM_API_BASE", "") or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-    LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "") or os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
+    LLM_API_BASE = os.getenv("LLM_API_BASE", "") or os.getenv("OPENAI_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "") or os.getenv("OPENAI_MODEL_NAME", "deepseek-v4-pro")
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
 
     EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", "") or os.getenv("LLM_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
-    EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", "") or os.getenv("LLM_API_BASE", "") or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+    EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", "") or os.getenv("LLM_API_BASE", "") or os.getenv("OPENAI_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v4")
 
     USE_LOCAL_EMBEDDING = os.getenv("USE_LOCAL_EMBEDDING", "true").lower() == "true"
@@ -86,7 +86,9 @@ class Config:
 
     @property
     def LLM_PROVIDER(self):
-        if "dashscope" in self.LLM_API_BASE.lower():
+        if "deepseek" in self.LLM_API_BASE.lower():
+            return "DeepSeek"
+        elif "dashscope" in self.LLM_API_BASE.lower():
             return "DashScope"
         elif "openai" in self.LLM_API_BASE.lower():
             return "OpenAI"
