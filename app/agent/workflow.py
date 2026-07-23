@@ -21,7 +21,9 @@ def strip_thinking(text):
         text = text.rsplit("</think>", 1)[-1]
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
-    text = re.sub(r"^Here'?s a thinking process:.*$", "", text, flags=re.MULTILINE | re.DOTALL)
+    text = re.sub(
+        r"^Here'?s a thinking process:.*$", "", text, flags=re.MULTILINE | re.DOTALL
+    )
     return text.strip()
 
 
@@ -70,13 +72,17 @@ def load_file(state):
                 f"文件信息: {file_path}",
                 f"列: {', '.join(columns)}",
                 f"行数: {row_count}",
-                "数据摘要:"
+                "数据摘要:",
             ]
             for col, info in summary.items():
                 if info.get("type") == "numeric":
-                    content_parts.append(f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}")
+                    content_parts.append(
+                        f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}"
+                    )
                 else:
-                    content_parts.append(f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}")
+                    content_parts.append(
+                        f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}"
+                    )
 
             if sample_rows:
                 content_parts.append("数据样例 (前3行):")
@@ -84,7 +90,10 @@ def load_file(state):
                     content_parts.append(f"  第{i+1}行: {row}")
 
             state["file_content"] = "\n".join(content_parts)
-            logger.info("[Workflow] File parsed successfully: %s, %d rows, %d columns" % (file_path, row_count, len(columns)))
+            logger.info(
+                "[Workflow] File parsed successfully: %s, %d rows, %d columns"
+                % (file_path, row_count, len(columns))
+            )
 
     except Exception as e:
         logger.error("[Workflow] Failed to parse file: %s" % str(e))
@@ -102,23 +111,31 @@ def skill_executor(state):
     tool_result = state["tool_result"]
     skill = tool_result.get("skill")
     user_input = tool_result.get("user_input", "")
-    state["token_usage"] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    state["token_usage"] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
 
     skill_start = time.time()
     if skill == "product_skill":
         from app.skills.product_skill import product_skill
+
         result = product_skill(user_input)
         monitoring_stats.record_skill_call("product_skill", time.time() - skill_start)
     elif skill == "ads_skill":
         from app.skills.ads_skill import ads_skill
+
         result = ads_skill(user_input)
         monitoring_stats.record_skill_call("ads_skill", time.time() - skill_start)
     elif skill == "content_skill":
         from app.skills.content_skill import content_skill
+
         result = content_skill(user_input)
         monitoring_stats.record_skill_call("content_skill", time.time() - skill_start)
     elif skill == "help_skill":
         from app.skills.help_skill import help_skill
+
         result = help_skill(user_input)
         monitoring_stats.record_skill_call("help_skill", time.time() - skill_start)
     # ============================================================
@@ -126,17 +143,22 @@ def skill_executor(state):
     # ============================================================
     elif skill == "file_analysis_skill":
         from app.skills.file_analysis_skill import file_analysis_skill
+
         file_path = tool_result.get("file_path")
         file_content = tool_result.get("file_content") or state.get("file_content")
         result = file_analysis_skill(user_input, file_path, file_content)
-        monitoring_stats.record_skill_call("file_analysis_skill", time.time() - skill_start)
+        monitoring_stats.record_skill_call(
+            "file_analysis_skill", time.time() - skill_start
+        )
     else:
         llm = get_llm()
-        system_msg = SystemMessage(content=(
-            "You are an Ecommerce Agent assistant. For questions that cannot be categorized "
-            "into specific business skills (such as greetings, identity inquiries, casual chat, etc.), "
-            "please answer directly in Chinese in a friendly manner."
-        ))
+        system_msg = SystemMessage(
+            content=(
+                "You are an Ecommerce Agent assistant. For questions that cannot be categorized "
+                "into specific business skills (such as greetings, identity inquiries, casual chat, etc.), "
+                "please answer directly in Chinese in a friendly manner."
+            )
+        )
         human_msg = HumanMessage(content=user_input)
         llm_start = time.time()
         try:
@@ -152,14 +174,19 @@ def skill_executor(state):
                 state["token_usage"] = {
                     "prompt_tokens": token_usage.get("prompt_tokens", 0),
                     "completion_tokens": token_usage.get("completion_tokens", 0),
-                    "total_tokens": token_usage.get("total_tokens", 0)
+                    "total_tokens": token_usage.get("total_tokens", 0),
                 }
-                monitoring_stats.record_llm_call(llm_duration, token_usage=state["token_usage"])
-                logger.info("[Workflow] LLM Token Usage - Prompt: %d, Completion: %d, Total: %d" % (
-                    state["token_usage"]["prompt_tokens"],
-                    state["token_usage"]["completion_tokens"],
-                    state["token_usage"]["total_tokens"]
-                ))
+                monitoring_stats.record_llm_call(
+                    llm_duration, token_usage=state["token_usage"]
+                )
+                logger.info(
+                    "[Workflow] LLM Token Usage - Prompt: %d, Completion: %d, Total: %d"
+                    % (
+                        state["token_usage"]["prompt_tokens"],
+                        state["token_usage"]["completion_tokens"],
+                        state["token_usage"]["total_tokens"],
+                    )
+                )
         except Exception as e:
             reply = "Error processing request: %s" % str(e)
             monitoring_stats.record_llm_call(time.time() - llm_start, success=False)
@@ -175,7 +202,12 @@ def answer_node(state):
     if isinstance(result, dict):
         data = result.get("data", "")
         if isinstance(data, dict):
-            text = data.get("analysis") or data.get("copy") or data.get("response") or str(data)
+            text = (
+                data.get("analysis")
+                or data.get("copy")
+                or data.get("response")
+                or str(data)
+            )
             state["answer"] = strip_thinking(text)
         elif isinstance(data, str):
             state["answer"] = strip_thinking(data) or str(result)
@@ -189,14 +221,14 @@ def answer_node(state):
 graph = StateGraph(AgentState)
 
 graph.add_node("load_history", load_history)
-graph.add_node("load_file", load_file)      # 新增：文件解析节点
+graph.add_node("load_file", load_file)  # 新增：文件解析节点
 graph.add_node("router", router)
 graph.add_node("skill_executor", skill_executor)
 graph.add_node("answer", answer_node)
 graph.add_node("save_history", save_history)
 
 graph.set_entry_point("load_history")
-graph.add_edge("load_history", "load_file")   # 先加载文件再路由
+graph.add_edge("load_history", "load_file")  # 先加载文件再路由
 graph.add_edge("load_file", "router")
 graph.add_edge("router", "skill_executor")
 graph.add_edge("skill_executor", "answer")

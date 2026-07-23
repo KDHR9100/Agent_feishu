@@ -24,10 +24,7 @@ class FeishuTool:
             return self.access_token
 
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-        payload = {
-            "app_id": self.app_id,
-            "app_secret": self.app_secret
-        }
+        payload = {"app_id": self.app_id, "app_secret": self.app_secret}
 
         try:
             response = requests.post(url, json=payload, timeout=10)
@@ -39,7 +36,10 @@ class FeishuTool:
                     logger.info("[FeishuTool] Access token obtained successfully")
                     return self.access_token
                 else:
-                    logger.error("[FeishuTool] Failed to get token: %s" % data.get("msg", "Unknown error"))
+                    logger.error(
+                        "[FeishuTool] Failed to get token: %s"
+                        % data.get("msg", "Unknown error")
+                    )
             else:
                 logger.error("[FeishuTool] HTTP error: %d" % response.status_code)
         except Exception as e:
@@ -53,7 +53,9 @@ class FeishuTool:
             return json.dumps({"text": content}, ensure_ascii=False)
         return content
 
-    def send_message(self, chat_id: str, content: str, msg_type: str = "text") -> Dict[str, Any]:
+    def send_message(
+        self, chat_id: str, content: str, msg_type: str = "text"
+    ) -> Dict[str, Any]:
         """Send message to a chat"""
         token = self.get_access_token()
         if not token:
@@ -62,25 +64,25 @@ class FeishuTool:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
         headers = {
             "Authorization": "Bearer %s" % token,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         content_json = self._build_content(content, msg_type)
-        payload = {
-            "receive_id": chat_id,
-            "msg_type": msg_type,
-            "content": content_json
-        }
+        payload = {"receive_id": chat_id, "msg_type": msg_type, "content": content_json}
         params = {"receive_id_type": "chat_id"}
 
         try:
-            response = requests.post(url, headers=headers, json=payload, params=params, timeout=10)
+            response = requests.post(
+                url, headers=headers, json=payload, params=params, timeout=10
+            )
             return response.json()
         except Exception as e:
             logger.error("[FeishuTool] Failed to send message: %s" % str(e))
             return {"error": str(e)}
 
-    def reply_message(self, message_id: str, content: str, msg_type: str = "text") -> Dict[str, Any]:
+    def reply_message(
+        self, message_id: str, content: str, msg_type: str = "text"
+    ) -> Dict[str, Any]:
         """Reply to a specific message"""
         token = self.get_access_token()
         if not token:
@@ -89,14 +91,11 @@ class FeishuTool:
         url = "https://open.feishu.cn/open-apis/im/v1/messages/%s/reply" % message_id
         headers = {
             "Authorization": "Bearer %s" % token,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         content_json = self._build_content(content, msg_type)
-        payload = {
-            "msg_type": msg_type,
-            "content": content_json
-        }
+        payload = {"msg_type": msg_type, "content": content_json}
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -105,7 +104,9 @@ class FeishuTool:
             logger.error("[FeishuTool] Failed to reply message: %s" % str(e))
             return {"error": str(e)}
 
-    def create_document(self, folder_token: str, title: str, content: str) -> Dict[str, Any]:
+    def create_document(
+        self, folder_token: str, title: str, content: str
+    ) -> Dict[str, Any]:
         """Create a document in Feishu Docs"""
         token = self.get_access_token()
         if not token:
@@ -114,13 +115,9 @@ class FeishuTool:
         url = "https://open.feishu.cn/open-apis/docx/v1/documents"
         headers = {
             "Authorization": "Bearer %s" % token,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        payload = {
-            "folder_token": folder_token,
-            "title": title,
-            "content": content
-        }
+        payload = {"folder_token": folder_token, "title": title, "content": content}
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -166,10 +163,16 @@ class FeishuTool:
                             os.makedirs(os.path.dirname(save_path), exist_ok=True)
                             with open(save_path, "wb") as f:
                                 f.write(file_response.content)
-                            logger.info("[FeishuTool] File downloaded successfully: %s" % save_path)
+                            logger.info(
+                                "[FeishuTool] File downloaded successfully: %s"
+                                % save_path
+                            )
                             return {"success": True, "path": save_path}
                         else:
-                            return {"error": "Failed to download file, HTTP %d" % file_response.status_code}
+                            return {
+                                "error": "Failed to download file, HTTP %d"
+                                % file_response.status_code
+                            }
                     else:
                         return {"error": "No download URL found"}
                 else:
@@ -182,6 +185,5 @@ class FeishuTool:
 
 
 feishu_tool = FeishuTool(
-    app_id=config.FEISHU_APP_ID,
-    app_secret=config.FEISHU_APP_SECRET
+    app_id=config.FEISHU_APP_ID, app_secret=config.FEISHU_APP_SECRET
 )

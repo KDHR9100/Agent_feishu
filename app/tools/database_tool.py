@@ -9,9 +9,13 @@ from app.config import config
 class DatabaseTool:
     def __init__(self, db_url: Optional[str] = None):
         self.db_url = db_url or config.DATABASE_URL
-        self.engine = create_engine(self.db_url, connect_args={"check_same_thread": False})
+        self.engine = create_engine(
+            self.db_url, connect_args={"check_same_thread": False}
+        )
 
-    def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def query(
+        self, sql: str, params: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(text(sql), params or {})
@@ -20,7 +24,9 @@ class DatabaseTool:
         except SQLAlchemyError as e:
             return [{"error": str(e)}]
 
-    def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def execute(
+        self, sql: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(text(sql), params or {})
@@ -29,7 +35,9 @@ class DatabaseTool:
         except SQLAlchemyError as e:
             return {"error": str(e)}
 
-    def get_product_sales(self, sku: Optional[str] = None, days: int = 7) -> List[Dict[str, Any]]:
+    def get_product_sales(
+        self, sku: Optional[str] = None, days: int = 7
+    ) -> List[Dict[str, Any]]:
         if sku:
             date_threshold = (datetime.utcnow() - timedelta(days=days)).isoformat()
             sql = """SELECT sku, product_name, category, sales_volume, revenue, cost, inventory, avg_price, date
@@ -63,7 +71,9 @@ class DatabaseTool:
                  ORDER BY total_revenue DESC"""
         return self.query(sql)
 
-    def get_ads_performance(self, ad_id: Optional[str] = None, days: int = 7) -> List[Dict[str, Any]]:
+    def get_ads_performance(
+        self, ad_id: Optional[str] = None, days: int = 7
+    ) -> List[Dict[str, Any]]:
         if ad_id:
             date_threshold = (datetime.utcnow() - timedelta(days=days)).isoformat()
             sql = """SELECT ad_id, ad_name, platform, clicks, impressions, spend, conversions,
@@ -93,7 +103,9 @@ class DatabaseTool:
                  ORDER BY total_spend DESC"""
         return self.query(sql)
 
-    def get_campaign_performance(self, campaign_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_campaign_performance(
+        self, campaign_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         if campaign_id:
             sql = """SELECT campaign_id, ad_group_id, SUM(clicks) as total_clicks,
                        SUM(spend) as total_spend, SUM(conversions) as total_conversions,
@@ -115,3 +127,4 @@ class DatabaseTool:
 
 
 db_tool = DatabaseTool()
+database_tool = db_tool

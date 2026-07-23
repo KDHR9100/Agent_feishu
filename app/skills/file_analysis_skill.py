@@ -5,14 +5,16 @@ from langchain_core.messages import HumanMessage, SystemMessage
 logger = logging.getLogger("file_analysis_skill")
 
 
-def file_analysis_skill(user_input: str, file_path: str = None, file_content: str = None) -> dict:
+def file_analysis_skill(
+    user_input: str, file_path: str = None, file_content: str = None
+) -> dict:
     """
     文件解析技能：接收文件路径和已解析的内容，生成分析报告
     """
     if not file_content:
         return {
             "type": "file_analysis",
-            "data": "未收到有效的文件内容，请重新上传文件。"
+            "data": "未收到有效的文件内容，请重新上传文件。",
         }
 
     # 构建分析 prompt
@@ -37,7 +39,7 @@ def file_analysis_skill(user_input: str, file_path: str = None, file_content: st
         llm = get_llm()
         messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
+            HumanMessage(content=user_prompt),
         ]
         response = llm.invoke(messages)
 
@@ -46,23 +48,20 @@ def file_analysis_skill(user_input: str, file_path: str = None, file_content: st
         # 记录 token 使用（可选）
         if hasattr(response, "response_metadata") and response.response_metadata:
             token_usage = response.response_metadata.get("token_usage", {})
-            logger.info("[FileAnalysisSkill] Token Usage - Prompt: %d, Completion: %d, Total: %d" % (
-                token_usage.get("prompt_tokens", 0),
-                token_usage.get("completion_tokens", 0),
-                token_usage.get("total_tokens", 0)
-            ))
+            logger.info(
+                "[FileAnalysisSkill] Token Usage - Prompt: %d, Completion: %d, Total: %d"
+                % (
+                    token_usage.get("prompt_tokens", 0),
+                    token_usage.get("completion_tokens", 0),
+                    token_usage.get("total_tokens", 0),
+                )
+            )
 
-        return {
-            "type": "file_analysis",
-            "data": reply
-        }
+        return {"type": "file_analysis", "data": reply}
 
     except Exception as e:
         logger.error("[FileAnalysisSkill] Error: %s" % str(e))
-        return {
-            "type": "file_analysis",
-            "data": f"分析文件时出错：{str(e)}"
-        }
+        return {"type": "file_analysis", "data": f"分析文件时出错：{str(e)}"}
 
 
 # 导出技能实例（可选，保持与项目中其他 skill 一致）

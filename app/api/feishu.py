@@ -3,21 +3,16 @@ from pydantic import BaseModel
 from typing import Optional
 import json
 import logging
-import os
-import time
 import uuid
 
-from app.agents.coordinator import coordinator
 from app.agent.workflow import agent
 from app.tools.feishu_tool import feishu_tool
 from app.tools.file_parser_tool import file_parser_tool
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/feishu",
-    tags=["feishu"]
-)
+router = APIRouter(prefix="/feishu", tags=["feishu"])
+
 
 class MessageRequest(BaseModel):
     chat_id: str
@@ -31,7 +26,11 @@ async def feishu_webhook(request: Request):
     track_id = str(uuid.uuid4())[:8]
     try:
         body = await request.json()
-        logger.info("[Feishu] [%s] Webhook received: %s", track_id, json.dumps(body, ensure_ascii=False)[:500])
+        logger.info(
+            "[Feishu] [%s] Webhook received: %s",
+            track_id,
+            json.dumps(body, ensure_ascii=False)[:500],
+        )
 
         # ============================================================
         # 1. 飞书首次验证（url_verification）
@@ -63,7 +62,13 @@ async def feishu_webhook(request: Request):
         sender = event.get("sender", {})
         user_id = sender.get("sender_id", {}).get("user_id", "")
 
-        logger.info("[Feishu] [%s] msg_type=%s, chat_id=%s, message_id=%s", track_id, msg_type, chat_id, message_id)
+        logger.info(
+            "[Feishu] [%s] msg_type=%s, chat_id=%s, message_id=%s",
+            track_id,
+            msg_type,
+            chat_id,
+            message_id,
+        )
 
         # ============================================================
         # 3a. 文本消息
@@ -77,7 +82,9 @@ async def feishu_webhook(request: Request):
                 content_json = json.loads(content_raw)
                 text_content = content_json.get("text", "")
             except Exception as e:
-                logger.error("[Feishu] [%s] Failed to parse text content: %s", track_id, str(e))
+                logger.error(
+                    "[Feishu] [%s] Failed to parse text content: %s", track_id, str(e)
+                )
                 text_content = ""
 
             # 去除 @机器人 的提及
@@ -95,11 +102,22 @@ async def feishu_webhook(request: Request):
             try:
                 content_json = json.loads(content_raw)
                 # 兼容多种字段名
-                file_key = content_json.get("file_key") or content_json.get("file_token") or content_json.get("media_id") or ""
+                file_key = (
+                    content_json.get("file_key")
+                    or content_json.get("file_token")
+                    or content_json.get("media_id")
+                    or ""
+                )
                 file_name = content_json.get("file_name", "unknown")
                 file_size = content_json.get("file_size", 0)
 
-                logger.info("[Feishu] [%s] File detected - key=%s, name=%s, size=%d", track_id, file_key, file_name, file_size)
+                logger.info(
+                    "[Feishu] [%s] File detected - key=%s, name=%s, size=%d",
+                    track_id,
+                    file_key,
+                    file_name,
+                    file_size,
+                )
 
                 if file_key:
                     # 下载文件
@@ -108,12 +126,18 @@ async def feishu_webhook(request: Request):
 
                     if download_result.get("success"):
                         file_path = save_path
-                        logger.info("[Feishu] [%s] File downloaded: %s", track_id, file_path)
+                        logger.info(
+                            "[Feishu] [%s] File downloaded: %s", track_id, file_path
+                        )
 
                         # 解析文件
                         parse_result = file_parser_tool.parse_local_file(file_path)
                         if parse_result.get("error"):
-                            logger.error("[Feishu] [%s] File parse error: %s", track_id, parse_result.get("error"))
+                            logger.error(
+                                "[Feishu] [%s] File parse error: %s",
+                                track_id,
+                                parse_result.get("error"),
+                            )
                             file_content = None
                         else:
                             # 构建文件内容摘要
@@ -126,13 +150,17 @@ async def feishu_webhook(request: Request):
                                 f"文件信息: {file_name}",
                                 f"列: {', '.join(columns)}",
                                 f"行数: {row_count}",
-                                "数据摘要:"
+                                "数据摘要:",
                             ]
                             for col, info in summary.items():
                                 if info.get("type") == "numeric":
-                                    content_parts.append(f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}")
+                                    content_parts.append(
+                                        f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}"
+                                    )
                                 else:
-                                    content_parts.append(f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}")
+                                    content_parts.append(
+                                        f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}"
+                                    )
 
                             if sample_rows:
                                 content_parts.append("数据样例 (前3行):")
@@ -140,15 +168,26 @@ async def feishu_webhook(request: Request):
                                     content_parts.append(f"  第{i+1}行: {row}")
 
                             file_content = "\n".join(content_parts)
-                            logger.info("[Feishu] [%s] File parsed: %d rows, %d columns", track_id, row_count, len(columns))
+                            logger.info(
+                                "[Feishu] [%s] File parsed: %d rows, %d columns",
+                                track_id,
+                                row_count,
+                                len(columns),
+                            )
                     else:
-                        logger.warning("[Feishu] [%s] File download failed: %s", track_id, download_result.get("error"))
+                        logger.warning(
+                            "[Feishu] [%s] File download failed: %s",
+                            track_id,
+                            download_result.get("error"),
+                        )
                         text_content = f"[文件] {file_name} (下载失败)"
                 else:
                     text_content = "[文件] 无法获取文件标识"
 
             except Exception as e:
-                logger.error("[Feishu] [%s] Failed to parse file message: %s", track_id, str(e))
+                logger.error(
+                    "[Feishu] [%s] Failed to parse file message: %s", track_id, str(e)
+                )
                 text_content = "[文件] 解析失败"
 
         else:
@@ -164,7 +203,13 @@ async def feishu_webhook(request: Request):
 
         user_input = text_content if text_content else f"请分析我上传的文件"
 
-        logger.info("[Feishu] [%s] User=%s, Chat=%s, Input=%s", track_id, user_id, chat_id, user_input[:100])
+        logger.info(
+            "[Feishu] [%s] User=%s, Chat=%s, Input=%s",
+            track_id,
+            user_id,
+            chat_id,
+            user_input[:100],
+        )
 
         # ============================================================
         # 4. 调用 Agent Workflow（支持文件参数）
@@ -172,7 +217,7 @@ async def feishu_webhook(request: Request):
         try:
             agent_input = {
                 "user_input": user_input,
-                "conversation_id": chat_id  # 使用 chat_id 作为会话 ID
+                "conversation_id": chat_id,  # 使用 chat_id 作为会话 ID
             }
 
             if file_path:
@@ -181,12 +226,18 @@ async def feishu_webhook(request: Request):
 
             if file_content:
                 agent_input["file_content"] = file_content
-                logger.info("[Feishu] [%s] File content added to agent input (length=%d)", track_id, len(file_content))
+                logger.info(
+                    "[Feishu] [%s] File content added to agent input (length=%d)",
+                    track_id,
+                    len(file_content),
+                )
 
             result = agent.invoke(agent_input)
             answer = result.get("answer", "抱歉，我无法处理您的请求。")
 
-            logger.info("[Feishu] [%s] Agent completed, answer length=%d", track_id, len(answer))
+            logger.info(
+                "[Feishu] [%s] Agent completed, answer length=%d", track_id, len(answer)
+            )
 
         except Exception as e:
             logger.error("[Feishu] [%s] Agent error: %s", track_id, str(e))
@@ -201,7 +252,9 @@ async def feishu_webhook(request: Request):
                 answer = answer[:7500] + "\n\n...(回复内容过长，已截断)"
 
             send_result = feishu_tool.send_message(chat_id, answer)
-            logger.info("[Feishu] [%s] Reply sent: %s", track_id, send_result.get("code") == 0)
+            logger.info(
+                "[Feishu] [%s] Reply sent: %s", track_id, send_result.get("code") == 0
+            )
         else:
             logger.warning("[Feishu] [%s] Missing credentials or chat_id", track_id)
 
@@ -233,15 +286,14 @@ async def chat_with_agent(request: Request):
         if not user_input:
             raise HTTPException(status_code=400, detail="Message is required")
 
-        result = agent.invoke({
-            "user_input": user_input,
-            "conversation_id": conversation_id
-        })
+        result = agent.invoke(
+            {"user_input": user_input, "conversation_id": conversation_id}
+        )
 
         return {
             "status": "success",
             "answer": result.get("answer", ""),
-            "conversation_id": conversation_id
+            "conversation_id": conversation_id,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
