@@ -1,8 +1,8 @@
 ﻿import time
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 logger = logging.getLogger("monitoring")
 
@@ -11,7 +11,7 @@ logger = logging.getLogger("monitoring")
 class MetricCounter:
     count: int = 0
     total_time: float = 0.0
-    min_time: float = float('inf')
+    min_time: float = float("inf")
     max_time: float = 0.0
     errors: int = 0
 
@@ -43,12 +43,16 @@ class MonitoringStats:
         self.total_tokens = {"prompt": 0, "completion": 0, "total": 0}
         self._lock = __import__("threading").Lock()
 
-    def record_llm_call(self, duration: float, success: bool = True, token_usage: Optional[Dict] = None):
+    def record_llm_call(
+        self, duration: float, success: bool = True, token_usage: Optional[Dict] = None
+    ):
         with self._lock:
             self.llm_calls.add(duration, success)
             if token_usage:
                 self.total_tokens["prompt"] += token_usage.get("prompt_tokens", 0)
-                self.total_tokens["completion"] += token_usage.get("completion_tokens", 0)
+                self.total_tokens["completion"] += token_usage.get(
+                    "completion_tokens", 0
+                )
                 self.total_tokens["total"] += token_usage.get("total_tokens", 0)
 
     def record_embedding_call(self, duration: float, success: bool = True):
@@ -79,7 +83,11 @@ class MonitoringStats:
 
     def get_health_status(self) -> Dict[str, Any]:
         uptime = time.time() - self.start_time
-        min_time = self.llm_calls.min_time * 1000 if self.llm_calls.min_time != float('inf') else 0.0
+        min_time = (
+            self.llm_calls.min_time * 1000
+            if self.llm_calls.min_time != float("inf")
+            else 0.0
+        )
         max_time = self.llm_calls.max_time * 1000
         return {
             "status": "healthy",
@@ -92,27 +100,47 @@ class MonitoringStats:
                     "avg_time_ms": round(self.llm_calls.avg_time * 1000, 2),
                     "min_time_ms": round(min_time, 2),
                     "max_time_ms": round(max_time, 2),
-                    "error_rate": round(self.llm_calls.errors / max(self.llm_calls.count, 1) * 100, 2),
+                    "error_rate": round(
+                        self.llm_calls.errors / max(self.llm_calls.count, 1) * 100, 2
+                    ),
                 },
                 "embedding_calls": {
                     "count": self.embedding_calls.count,
                     "avg_time_ms": round(self.embedding_calls.avg_time * 1000, 2),
-                    "error_rate": round(self.embedding_calls.errors / max(self.embedding_calls.count, 1) * 100, 2),
+                    "error_rate": round(
+                        self.embedding_calls.errors
+                        / max(self.embedding_calls.count, 1)
+                        * 100,
+                        2,
+                    ),
                 },
                 "feishu_api_calls": {
                     "count": self.feishu_api_calls.count,
                     "avg_time_ms": round(self.feishu_api_calls.avg_time * 1000, 2),
-                    "error_rate": round(self.feishu_api_calls.errors / max(self.feishu_api_calls.count, 1) * 100, 2),
+                    "error_rate": round(
+                        self.feishu_api_calls.errors
+                        / max(self.feishu_api_calls.count, 1)
+                        * 100,
+                        2,
+                    ),
                 },
                 "rag_queries": {
                     "count": self.rag_queries.count,
                     "avg_time_ms": round(self.rag_queries.avg_time * 1000, 2),
-                    "error_rate": round(self.rag_queries.errors / max(self.rag_queries.count, 1) * 100, 2),
+                    "error_rate": round(
+                        self.rag_queries.errors / max(self.rag_queries.count, 1) * 100,
+                        2,
+                    ),
                 },
                 "database_queries": {
                     "count": self.database_queries.count,
                     "avg_time_ms": round(self.database_queries.avg_time * 1000, 2),
-                    "error_rate": round(self.database_queries.errors / max(self.database_queries.count, 1) * 100, 2),
+                    "error_rate": round(
+                        self.database_queries.errors
+                        / max(self.database_queries.count, 1)
+                        * 100,
+                        2,
+                    ),
                 },
             },
             "intent_distribution": self.intent_counts.copy(),
@@ -143,7 +171,10 @@ class MonitoringStats:
                 "database_errors": self.database_queries.errors,
             },
             "intent_summary": self.intent_counts.copy(),
-            "skill_summary": {k: {"count": v.count, "avg_time_ms": round(v.avg_time * 1000, 2)} for k, v in self.skill_calls.items()},
+            "skill_summary": {
+                k: {"count": v.count, "avg_time_ms": round(v.avg_time * 1000, 2)}
+                for k, v in self.skill_calls.items()
+            },
         }
 
     def _format_uptime(self, seconds: float) -> str:

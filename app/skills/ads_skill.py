@@ -9,8 +9,8 @@ from app.tools.database_tool import db_tool
 
 def extract_ad_id_from_input(user_input: str) -> Optional[str]:
     patterns = [
-        r'ad_id\s*[:]?\s*(\w+)',
-        r'AD\s*(\w+)',
+        r"ad_id\s*[:]?\s*(\w+)",
+        r"AD\s*(\w+)",
     ]
     for pattern in patterns:
         match = re.search(pattern, user_input, re.IGNORECASE)
@@ -46,29 +46,29 @@ def compare_platforms(platform_data):
     highest_ctr_platform = None
 
     for platform in platform_data:
-        roas = platform.get('avg_roas', 0)
-        cpc = platform.get('avg_cpc', float('inf'))
-        ctr = platform.get('avg_ctr', 0)
+        roas = platform.get("avg_roas", 0)
+        cpc = platform.get("avg_cpc", float("inf"))
+        ctr = platform.get("avg_ctr", 0)
 
         if best_roas is None or roas > best_roas:
             best_roas = roas
-            best_platform = platform.get('platform', '')
+            best_platform = platform.get("platform", "")
 
         if cpc < lowest_cpc:
             lowest_cpc = cpc
-            lowest_cpc_platform = platform.get('platform', '')
+            lowest_cpc_platform = platform.get("platform", "")
 
         if ctr > highest_ctr:
             highest_ctr = ctr
-            highest_ctr_platform = platform.get('platform', '')
+            highest_ctr_platform = platform.get("platform", "")
 
     return {
-        'best_roas': best_roas,
-        'best_roas_platform': best_platform,
-        'lowest_cpc': lowest_cpc,
-        'lowest_cpc_platform': lowest_cpc_platform,
-        'highest_ctr': highest_ctr,
-        'highest_ctr_platform': highest_ctr_platform,
+        "best_roas": best_roas,
+        "best_roas_platform": best_platform,
+        "lowest_cpc": lowest_cpc,
+        "lowest_cpc_platform": lowest_cpc_platform,
+        "highest_ctr": highest_ctr,
+        "highest_ctr_platform": highest_ctr_platform,
     }
 
 
@@ -100,71 +100,83 @@ def ads_skill(user_input: str):
 
     if isinstance(db_data, list) and db_data:
         for item in db_data:
-            if 'error' not in item:
-                spend = item.get('spend', item.get('total_spend', 0))
-                clicks = item.get('clicks', item.get('total_clicks', 0))
-                conversions = item.get('conversions', item.get('total_conversions', 0))
-                conversion_value = item.get('conversion_value', item.get('total_conversion_value', 0))
-                impressions = item.get('impressions', item.get('total_impressions', 0))
+            if "error" not in item:
+                spend = item.get("spend", item.get("total_spend", 0))
+                clicks = item.get("clicks", item.get("total_clicks", 0))
+                conversions = item.get("conversions", item.get("total_conversions", 0))
+                conversion_value = item.get(
+                    "conversion_value", item.get("total_conversion_value", 0)
+                )
+                impressions = item.get("impressions", item.get("total_impressions", 0))
 
-                ads_summary.append({
-                    'ad_id': item.get('ad_id', ''),
-                    'ad_name': item.get('ad_name', ''),
-                    'platform': item.get('platform', ''),
-                    'clicks': clicks,
-                    'impressions': impressions,
-                    'spend': spend,
-                    'conversions': conversions,
-                    'conversion_value': conversion_value,
-                    'ctr': item.get('ctr', calculate_ctr(clicks, impressions)),
-                    'cpc': item.get('cpc', calculate_cpc(spend, clicks)),
-                    'roas': item.get('roas', calculate_roi(spend, conversion_value)),
-                    'date': item.get('date', ''),
-                })
+                ads_summary.append(
+                    {
+                        "ad_id": item.get("ad_id", ""),
+                        "ad_name": item.get("ad_name", ""),
+                        "platform": item.get("platform", ""),
+                        "clicks": clicks,
+                        "impressions": impressions,
+                        "spend": spend,
+                        "conversions": conversions,
+                        "conversion_value": conversion_value,
+                        "ctr": item.get("ctr", calculate_ctr(clicks, impressions)),
+                        "cpc": item.get("cpc", calculate_cpc(spend, clicks)),
+                        "roas": item.get(
+                            "roas", calculate_roi(spend, conversion_value)
+                        ),
+                        "date": item.get("date", ""),
+                    }
+                )
                 total_spend += spend
                 total_clicks += clicks
                 total_conversions += conversions
                 total_conversion_value += conversion_value
 
     overall_roi = calculate_roi(total_spend, total_conversion_value)
-    overall_ctr = calculate_ctr(total_clicks, sum(item.get('impressions', item.get('total_impressions', 0)) for item in ads_summary))
+    overall_ctr = calculate_ctr(
+        total_clicks,
+        sum(
+            item.get("impressions", item.get("total_impressions", 0))
+            for item in ads_summary
+        ),
+    )
     overall_cpc = calculate_cpc(total_spend, total_clicks)
 
     platform_comparison = compare_platforms(platform_data)
 
     combined_data = {
-        'database_data': ads_summary,
-        'platform_data': platform_data,
-        'campaign_data': campaign_data,
-        'overall_metrics': {
-            'total_spend': round(total_spend, 2),
-            'total_clicks': total_clicks,
-            'total_conversions': total_conversions,
-            'total_conversion_value': round(total_conversion_value, 2),
-            'overall_roi': overall_roi,
-            'overall_ctr': overall_ctr,
-            'overall_cpc': overall_cpc,
+        "database_data": ads_summary,
+        "platform_data": platform_data,
+        "campaign_data": campaign_data,
+        "overall_metrics": {
+            "total_spend": round(total_spend, 2),
+            "total_clicks": total_clicks,
+            "total_conversions": total_conversions,
+            "total_conversion_value": round(total_conversion_value, 2),
+            "overall_roi": overall_roi,
+            "overall_ctr": overall_ctr,
+            "overall_cpc": overall_cpc,
         },
-        'platform_comparison': platform_comparison,
-        'extracted_ad_id': extracted_ad_id,
-        'user_input': user_input,
+        "platform_comparison": platform_comparison,
+        "extracted_ad_id": extracted_ad_id,
+        "user_input": user_input,
     }
 
     prompt = ADS_ANALYSIS_PROMPT.format(data=combined_data)
 
     messages = [
-        SystemMessage(content='You are an e-commerce advertising analysis expert'),
+        SystemMessage(content="You are an e-commerce advertising analysis expert"),
         HumanMessage(content=prompt),
     ]
 
     analysis = llm.invoke(messages).content
 
     return {
-        'type': 'ads_analysis',
-        'data': {
-            'raw_data': combined_data,
-            'analysis': analysis,
-            'overall_roi': overall_roi,
-            'platform_comparison': platform_comparison,
-        }
+        "type": "ads_analysis",
+        "data": {
+            "raw_data": combined_data,
+            "analysis": analysis,
+            "overall_roi": overall_roi,
+            "platform_comparison": platform_comparison,
+        },
     }

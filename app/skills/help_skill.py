@@ -10,16 +10,13 @@ def help_skill(user_input: str):
     prompt = HELP_PROMPT.format(user_input=user_input)
 
     messages = [
-        SystemMessage(content='You are an e-commerce operation expert assistant'),
+        SystemMessage(content="You are an e-commerce operation expert assistant"),
         HumanMessage(content=prompt),
     ]
 
     response = llm.invoke(messages).content
 
     return {
-        'type': 'help_response',
-        'data': {
-            'user_input': user_input,
-            'response': response
-        }
+        "type": "help_response",
+        "data": {"user_input": user_input, "response": response},
     }
