@@ -2,6 +2,7 @@ import requests
 import time
 import json
 import os
+import urllib.parse
 from app.config import config, logger
 from typing import Optional, Dict, Any
 
@@ -14,18 +15,14 @@ class FeishuTool:
         self.token_expire_time: float = 0.0
 
     def get_access_token(self) -> Optional[str]:
-        """Get tenant_access_token with caching"""
         if not self.app_id or not self.app_secret:
             logger.error("[FeishuTool] App ID or App Secret not configured")
             return ""
-
-        # Return cached token if still valid
         if self.access_token and time.time() < self.token_expire_time:
             return self.access_token
 
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
         payload = {"app_id": self.app_id, "app_secret": self.app_secret}
-
         try:
             response = requests.post(url, json=payload, timeout=10)
             if response.status_code == 200:
@@ -36,27 +33,19 @@ class FeishuTool:
                     logger.info("[FeishuTool] Access token obtained successfully")
                     return self.access_token
                 else:
-                    logger.error(
-                        "[FeishuTool] Failed to get token: %s"
-                        % data.get("msg", "Unknown error")
-                    )
+                    logger.error("[FeishuTool] Failed to get token: %s" % data.get("msg", "Unknown error"))
             else:
                 logger.error("[FeishuTool] HTTP error: %d" % response.status_code)
         except Exception as e:
             logger.error("[FeishuTool] Failed to get access token: %s" % str(e))
-
         return ""
 
     def _build_content(self, content: str, msg_type: str = "text") -> str:
-        """Build message content JSON safely"""
         if msg_type == "text":
             return json.dumps({"text": content}, ensure_ascii=False)
         return content
 
-    def send_message(
-        self, chat_id: str, content: str, msg_type: str = "text"
-    ) -> Dict[str, Any]:
-        """Send message to a chat"""
+    def send_message(self, chat_id: str, content: str, msg_type: str = "text") -> Dict[str, Any]:
         token = self.get_access_token()
         if not token:
             return {"error": "Failed to get access token"}
@@ -64,26 +53,25 @@ class FeishuTool:
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
         headers = {
             "Authorization": "Bearer %s" % token,
-            "Content-Type": "application/json",
+            "Content-Type": "application/json"
         }
 
         content_json = self._build_content(content, msg_type)
-        payload = {"receive_id": chat_id, "msg_type": msg_type, "content": content_json}
+        payload = {
+            "receive_id": chat_id,
+            "msg_type": msg_type,
+            "content": content_json
+        }
         params = {"receive_id_type": "chat_id"}
 
         try:
-            response = requests.post(
-                url, headers=headers, json=payload, params=params, timeout=10
-            )
+            response = requests.post(url, headers=headers, json=payload, params=params, timeout=10)
             return response.json()
         except Exception as e:
             logger.error("[FeishuTool] Failed to send message: %s" % str(e))
             return {"error": str(e)}
 
-    def reply_message(
-        self, message_id: str, content: str, msg_type: str = "text"
-    ) -> Dict[str, Any]:
-        """Reply to a specific message"""
+    def reply_message(self, message_id: str, content: str, msg_type: str = "text") -> Dict[str, Any]:
         token = self.get_access_token()
         if not token:
             return {"error": "Failed to get access token"}
@@ -91,11 +79,14 @@ class FeishuTool:
         url = "https://open.feishu.cn/open-apis/im/v1/messages/%s/reply" % message_id
         headers = {
             "Authorization": "Bearer %s" % token,
-            "Content-Type": "application/json",
+            "Content-Type": "application/json"
         }
 
         content_json = self._build_content(content, msg_type)
-        payload = {"msg_type": msg_type, "content": content_json}
+        payload = {
+            "msg_type": msg_type,
+            "content": content_json
+        }
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -104,10 +95,7 @@ class FeishuTool:
             logger.error("[FeishuTool] Failed to reply message: %s" % str(e))
             return {"error": str(e)}
 
-    def create_document(
-        self, folder_token: str, title: str, content: str
-    ) -> Dict[str, Any]:
-        """Create a document in Feishu Docs"""
+    def create_document(self, folder_token: str, title: str, content: str) -> Dict[str, Any]:
         token = self.get_access_token()
         if not token:
             return {"error": "Failed to get access token"}
@@ -115,9 +103,13 @@ class FeishuTool:
         url = "https://open.feishu.cn/open-apis/docx/v1/documents"
         headers = {
             "Authorization": "Bearer %s" % token,
-            "Content-Type": "application/json",
+            "Content-Type": "application/json"
         }
-        payload = {"folder_token": folder_token, "title": title, "content": content}
+        payload = {
+            "folder_token": folder_token,
+            "title": title,
+            "content": content
+        }
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -127,7 +119,6 @@ class FeishuTool:
             return {"error": str(e)}
 
     def get_user_info(self, user_id: str) -> Dict[str, Any]:
-        """Get user information"""
         token = self.get_access_token()
         if not token:
             return {"error": "Failed to get access token"}
@@ -142,82 +133,66 @@ class FeishuTool:
             logger.error("[FeishuTool] Failed to get user info: %s" % str(e))
             return {"error": str(e)}
 
-    def download_file(self, file_key: str, save_path: str) -> Dict[str, Any]:
-        """Download file from Feishu (for drive media)"""
-        token = self.get_access_token()
-        if not token:
-            return {"error": "Failed to get access token"}
-
-        url = "https://open.feishu.cn/open-apis/drive/v1/medias/%s/download" % file_key
-        headers = {"Authorization": "Bearer %s" % token}
-
-        try:
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("code") == 0:
-                    download_url = data.get("data", {}).get("download_url", "")
-                    if download_url:
-                        file_response = requests.get(download_url, timeout=60)
-                        if file_response.status_code == 200:
-                            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                            with open(save_path, "wb") as f:
-                                f.write(file_response.content)
-                            logger.info(
-                                "[FeishuTool] File downloaded successfully: %s"
-                                % save_path
-                            )
-                            return {"success": True, "path": save_path}
-                        else:
-                            return {
-                                "error": "Failed to download file, HTTP %d"
-                                % file_response.status_code
-                            }
-                    else:
-                        return {"error": "No download URL found"}
-                else:
-                    return {"error": data.get("msg", "Unknown error")}
-            else:
-                return {"error": "HTTP error: %d" % response.status_code}
-        except Exception as e:
-            logger.error("[FeishuTool] Failed to download file: %s" % str(e))
-            return {"error": str(e)}
-
-    # ============================================================
-    # 新增：下载消息中的资源文件（用于用户发送的附件）
-    # ============================================================
-    def download_message_resource(
-        self, message_id: str, file_key: str, save_path: str
-    ) -> Dict[str, Any]:
+    def download_file(self, file_key: str, save_path: str, message_id: str = "") -> Dict[str, Any]:
         """
-        下载飞书消息中的资源文件（官方 API）
-        文档：https://open.feishu.cn/document/server-docs/im-v1/message-resource/get
+        下载飞书文件。
+        如果提供了 message_id，则使用 IM 资源下载 API（用于聊天中的附件）。
+        否则回退到 Drive API（适用于云盘文件）。
         """
         token = self.get_access_token()
         if not token:
             return {"error": "Failed to get access token"}
 
-        url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{file_key}"
         headers = {"Authorization": f"Bearer {token}"}
 
         try:
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                with open(save_path, "wb") as f:
-                    f.write(response.content)
-                logger.info(
-                    "[FeishuTool] Message resource downloaded successfully: %s",
-                    save_path,
-                )
-                return {"success": True, "path": save_path}
+            if message_id:
+                # IM 资源下载 API（添加 type=file 参数）
+                encoded_message_id = urllib.parse.quote(message_id, safe='')
+                encoded_file_key = urllib.parse.quote(file_key, safe='')
+                url = f"https://open.feishu.cn/open-apis/im/v1/messages/{encoded_message_id}/resources/{encoded_file_key}?type=file"
+                logger.info("[FeishuTool] Download URL: %s", url)
+
+                response = requests.get(url, headers=headers, timeout=60)
+                if response.status_code == 200:
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    with open(save_path, "wb") as f:
+                        f.write(response.content)
+                    logger.info("[FeishuTool] File downloaded successfully: %s", save_path)
+                    return {"success": True, "path": save_path}
+                else:
+                    logger.error("[FeishuTool] IM download HTTP %d: %s", response.status_code, response.text[:200])
+                    return {"error": f"HTTP {response.status_code}"}
             else:
+                # Drive API（云盘文件）
+                url = f"https://open.feishu.cn/open-apis/drive/v1/medias/{file_key}/download"
+                response = requests.get(url, headers=headers, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("code") == 0:
+                        download_url = data.get("data", {}).get("download_url", "")
+                        if download_url:
+                            file_response = requests.get(download_url, timeout=60)
+                            if file_response.status_code == 200:
+                                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                                with open(save_path, "wb") as f:
+                                    f.write(file_response.content)
+                                logger.info("[FeishuTool] File downloaded successfully: %s", save_path)
+                                return {"success": True, "path": save_path}
+                        return {"error": "No download URL found"}
+                    return {"error": data.get("msg", "Unknown error")}
                 return {"error": f"HTTP {response.status_code}"}
         except Exception as e:
-            logger.error("[FeishuTool] Failed to download message resource: %s", str(e))
+            logger.error("[FeishuTool] Failed to download file: %s", str(e))
             return {"error": str(e)}
+
+    # 保留原有的 download_message_resource 方法（可选），但不使用
+    def download_message_resource(self, message_id: str, file_key: str, save_path: str) -> Dict[str, Any]:
+        """已废弃，请使用 download_file 并传入 message_id。保留此方法以防兼容问题。"""
+        return self.download_file(file_key, save_path, message_id=message_id)
 
 
 feishu_tool = FeishuTool(
-    app_id=config.FEISHU_APP_ID, app_secret=config.FEISHU_APP_SECRET
+    app_id=config.FEISHU_APP_ID,
+    app_secret=config.FEISHU_APP_SECRET
 )

@@ -45,6 +45,9 @@ def do_p2_im_message_receive_v1(data):
         content_raw = getattr(message, "content", "") or getattr(message, "raw_content", "")
         mentions = getattr(message, "mentions", []) or getattr(event, "mentions", [])
         
+        # 打印消息ID用于调试
+        logger.info("[Feishu WS] [%s] message_id=%s", track_id, message_id)
+
         # 打印 mentions 详细信息用于调试
         logger.info("[Feishu WS] [%s] mentions count: %d", track_id, len(mentions))
         for idx, m in enumerate(mentions):
@@ -184,12 +187,12 @@ def process_messages():
 
                     logger.info("[Feishu WS] [%s] Downloading file: %s", track_id, file_key)
                     # ============================================================
-                    # 改用 download_message_resource（支持用户消息中的附件）
+                    # 使用 download_file 并传入 message_id
                     # ============================================================
-                    download_result = feishu_tool.download_message_resource(
-                        msg["message_id"],
+                    download_result = feishu_tool.download_file(
                         file_key,
-                        save_path
+                        save_path,
+                        message_id=msg["message_id"]  # 传入 message_id
                     )
 
                     if download_result.get("success"):
