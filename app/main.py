@@ -214,8 +214,6 @@ async def startup_event():
                     "app.tools.feishu_ws",
                     config.FEISHU_APP_ID,
                     config.FEISHU_APP_SECRET,
-                    config.FEISHU_ENCRYPT_KEY,
-                    config.FEISHU_WEBHOOK_SECRET,
                 ],
                 stdout=None,
                 stderr=None,
