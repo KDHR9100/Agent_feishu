@@ -143,7 +143,7 @@ class FeishuTool:
             return {"error": str(e)}
 
     def download_file(self, file_key: str, save_path: str) -> Dict[str, Any]:
-        """Download file from Feishu"""
+        """Download file from Feishu (for drive media)"""
         token = self.get_access_token()
         if not token:
             return {"error": "Failed to get access token"}
@@ -181,6 +181,40 @@ class FeishuTool:
                 return {"error": "HTTP error: %d" % response.status_code}
         except Exception as e:
             logger.error("[FeishuTool] Failed to download file: %s" % str(e))
+            return {"error": str(e)}
+
+    # ============================================================
+    # 新增：下载消息中的资源文件（用于用户发送的附件）
+    # ============================================================
+    def download_message_resource(
+        self, message_id: str, file_key: str, save_path: str
+    ) -> Dict[str, Any]:
+        """
+        下载飞书消息中的资源文件（官方 API）
+        文档：https://open.feishu.cn/document/server-docs/im-v1/message-resource/get
+        """
+        token = self.get_access_token()
+        if not token:
+            return {"error": "Failed to get access token"}
+
+        url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{file_key}"
+        headers = {"Authorization": f"Bearer {token}"}
+
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                with open(save_path, "wb") as f:
+                    f.write(response.content)
+                logger.info(
+                    "[FeishuTool] Message resource downloaded successfully: %s",
+                    save_path,
+                )
+                return {"success": True, "path": save_path}
+            else:
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            logger.error("[FeishuTool] Failed to download message resource: %s", str(e))
             return {"error": str(e)}
 
 

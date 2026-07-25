@@ -1,113 +1,128 @@
-import asyncio
-import json
+import lark_oapi as lark
 import logging
-import sys
+import json
 import time
 import uuid
-import websockets
-import requests
-import os
 import queue
 import threading
-import traceback
+import os
+import sys
 
-# 强制写入错误日志文件
-ERROR_LOG = "/tmp/feishu_ws_error.log"
+# 导入项目内部模块
+from app.tools.feishu_tool import feishu_tool
+from app.tools.file_parser_tool import file_parser_tool
+from app.agent.workflow import agent
+from app.monitoring import monitoring_stats
 
-def log_error(msg):
-    with open(ERROR_LOG, "a") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {msg}\n")
-        f.flush()
-
+# 日志配置
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("app.log", encoding="utf-8")],
 )
-logger = logging.getLogger("feishu_ws")
+logger = logging.getLogger("feishu_ws_official")
 
 # 消息队列
-message_queue: queue.Queue = queue.Queue()
-
-
-def get_wss_token(app_id: str, app_secret: str) -> str:
-    """获取飞书 WebSocket 连接用的 wss_token"""
-    url = "https://open.feishu.cn/open-apis/ws/v1/token"
-    payload = {"app_id": app_id, "app_secret": app_secret}
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("code") == 0:
-                return data.get("data", {}).get("token", "")
-            else:
-                log_error(f"Failed to get wss_token: {data.get('msg')}")
-        else:
-            log_error(f"HTTP error: {response.status_code}")
-    except Exception as e:
-        log_error(f"Error getting wss_token: {str(e)}")
-    return ""
+message_queue = queue.Queue()
 
 
 def do_p2_im_message_receive_v1(data):
-    logger.info("[Feishu WS] ===== EVENT RECEIVED in do_p2_im_message_receive_v1 =====")
+    """处理接收到的消息事件 - 使用官方SDK对象"""
     start_time = time.time()
     track_id = str(uuid.uuid4())[:8]
 
     try:
-        # 打印原始事件
-        try:
-            raw_json = json.dumps(data, ensure_ascii=False, default=str)
-            logger.info("[Feishu WS] [%s] RAW EVENT: %s", track_id, raw_json[:1000])
-        except Exception:
-            logger.info("[Feishu WS] [%s] RAW EVENT (unserializable): %s", track_id, str(data)[:500])
+        # 提取事件信息
+        event = data.event
+        message = event.message
+        sender = event.sender
 
-        event = data.get("event", {})
-        message = event.get("message", {})
-        sender = event.get("sender", {})
-        message_id = message.get("message_id", "")
-        chat_id = message.get("chat_id", "")
-        msg_type = message.get("msg_type", "text")
-        content_raw = message.get("content", "{}")
-        mentions = message.get("mentions", [])
-        sender_id = sender.get("sender_id", {}).get("open_id", "")
+        # ---- 兼容多种属性名 ----
+        message_id = getattr(message, "message_id", None) or getattr(message, "id", "")
+        chat_id = getattr(message, "chat_id", None) or getattr(message, "group_id", "")
+        msg_type = getattr(message, "msg_type", None) or getattr(message, "message_type", None) or getattr(message, "type", "")
+        content_raw = getattr(message, "content", "") or getattr(message, "raw_content", "")
+        mentions = getattr(message, "mentions", []) or getattr(event, "mentions", [])
+        
+        # 打印 mentions 详细信息用于调试
+        logger.info("[Feishu WS] [%s] mentions count: %d", track_id, len(mentions))
+        for idx, m in enumerate(mentions):
+            logger.info("[Feishu WS] [%s] mention[%d] vars: %s", track_id, idx, vars(m))
 
-        logger.info("[Feishu WS] [%s] msg_type=%s, chat_id=%s", track_id, msg_type, chat_id)
+        sender_id = getattr(sender, "sender_id", None)
+        if sender_id:
+            sender_id = getattr(sender_id, "open_id", "") or getattr(sender_id, "user_id", "")
+        else:
+            sender_id = ""
 
-        bot_name = os.getenv("FEISHU_BOT_NAME", "Ecommerce Agent")
-        is_group_chat = chat_id.startswith("oc_")
+        # ---------- 判断群聊/私聊 ----------
+        chat_type = getattr(message, "chat_type", None)
+        if not chat_type:
+            chat_obj = getattr(event, "chat", None)
+            if chat_obj:
+                chat_type = getattr(chat_obj, "type", None)
+        if not chat_type:
+            chat_type = "group" if chat_id.startswith("oc_") else "p2p"
+
+        logger.info("[Feishu WS] [%s] msg_type=%s, chat_id=%s, chat_type=%s", track_id, msg_type, chat_id, chat_type)
+
+        # ---------- @ 过滤 ----------
+        bot_name = os.getenv("FEISHU_BOT_NAME", "Feishu Agent")
+        is_group_chat = (chat_type == "group")
+        is_private_chat = (chat_type == "p2p")
 
         if is_group_chat:
             bot_mentioned = False
+            bot_name_lower = bot_name.lower()
             for m in mentions:
-                m_name = m.get("name", "")
-                m_key = m.get("key", "")
-                if m_name == bot_name or bot_name in m_key:
+                m_name = getattr(m, "name", "")
+                m_key = getattr(m, "key", "")
+                m_open_id = getattr(m, "open_id", "")
+                m_tenant_key = getattr(m, "tenant_key", "")
+                if (m_name and (m_name.lower() == bot_name_lower or bot_name_lower in m_name.lower())) or \
+                   (m_key and (m_key == bot_name or bot_name in m_key)):
                     bot_mentioned = True
                     break
+                if hasattr(m, "mention_name"):
+                    if getattr(m, "mention_name", "").lower() == bot_name_lower:
+                        bot_mentioned = True
+                        break
             if not bot_mentioned:
                 logger.info("[Feishu WS] [%s] Group chat without mention, ignoring", track_id)
                 return
-        else:
+        elif is_private_chat:
             logger.info("[Feishu WS] [%s] Private chat, proceeding", track_id)
+        else:
+            if chat_id.startswith("oc_") and not mentions:
+                logger.info("[Feishu WS] [%s] Unknown chat type, treating as group without mention, ignoring", track_id)
+                return
+            logger.info("[Feishu WS] [%s] Unknown chat type, proceeding anyway", track_id)
 
         text_content = ""
         file_info = None
 
+        # ---------- 解析消息内容 ----------
         if msg_type == "text":
             try:
-                text_content = json.loads(content_raw).get("text", "")
+                if isinstance(content_raw, str):
+                    content_json = json.loads(content_raw)
+                else:
+                    content_json = content_raw
+                text_content = content_json.get("text", "")
             except Exception:
                 text_content = ""
             for mention in mentions:
-                key = mention.get("key", "")
+                key = getattr(mention, "key", "")
                 if key:
                     text_content = text_content.replace(key, "").strip()
 
-        elif msg_type in ["file", "media"]:
+        elif msg_type in ["file", "media", "image"]:
             try:
-                content_json = json.loads(content_raw)
+                if isinstance(content_raw, str):
+                    content_json = json.loads(content_raw)
+                else:
+                    content_json = content_raw
                 file_key = content_json.get("file_key") or content_json.get("file_token") or content_json.get("media_id") or ""
                 file_name = content_json.get("file_name", "unknown")
                 file_size = content_json.get("file_size", 0)
@@ -127,6 +142,7 @@ def do_p2_im_message_receive_v1(data):
 
         logger.info("[Feishu WS] [%s] Content: %s", track_id, text_content[:100])
 
+        # ---------- 放入队列 ----------
         message_queue.put({
             "track_id": track_id,
             "message_id": message_id,
@@ -143,76 +159,9 @@ def do_p2_im_message_receive_v1(data):
         logger.error("[Feishu WS] [%s] Failed to process event: %s", track_id, str(e), exc_info=True)
 
 
-async def feishu_ws_client(app_id: str, app_secret: str):
-    log_error("feishu_ws_client called")
-    token = get_wss_token(app_id, app_secret)   # 改为获取 wss_token
-    if not token:
-        log_error("Failed to get wss_token, aborting")
-        return
-
-    ws_url = f"wss://ws.feishu.cn/ws?token={token}"
-    log_error(f"Connecting to {ws_url[:80]}...")
-    logger.info("[Feishu WS] Connecting to: %s", ws_url[:80] + "...")
-
-
-    while True:
-        try:
-            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as websocket:
-                logger.info("[Feishu WS] WebSocket connected successfully!")
-                log_error("WebSocket connected")
-                await websocket.send(json.dumps({
-                    "type": "auth",
-                    "app_id": app_id,
-                    "app_secret": app_secret
-                }))
-                logger.info("[Feishu WS] Auth message sent, waiting for response...")
-
-                async for message in websocket:
-                    try:
-                        data = json.loads(message)
-                        event_type = data.get("type", "")
-                        log_error(f"Received event type: {event_type}")
-
-                        if event_type == "auth_success":
-                            logger.info("[Feishu WS] Authentication successful!")
-                        elif event_type == "auth_fail":
-                            logger.error("[Feishu WS] Authentication failed: %s", data)
-                            return
-                        elif event_type == "event":
-                            logger.info("[Feishu WS] Event received, calling handler...")
-                            do_p2_im_message_receive_v1(data)
-                        elif event_type == "ping":
-                            await websocket.send(json.dumps({"type": "pong"}))
-                            logger.debug("[Feishu WS] Pong sent")
-                        else:
-                            logger.debug("[Feishu WS] Unhandled message type: %s", event_type)
-                    except json.JSONDecodeError:
-                        logger.warning("[Feishu WS] Failed to parse message: %s", message[:200])
-                    except Exception as e:
-                        logger.error("[Feishu WS] Error processing message: %s", str(e))
-
-        except websockets.exceptions.ConnectionClosed as e:
-            logger.warning("[Feishu WS] Connection closed: %s, reconnecting in 5s...", str(e))
-            log_error(f"Connection closed: {e}")
-            await asyncio.sleep(5)
-        except Exception as e:
-            logger.error("[Feishu WS] Connection error: %s, reconnecting in 5s...", str(e))
-            log_error(f"Connection error: {e}")
-            await asyncio.sleep(5)
-
-
 def process_messages():
-    """消息处理线程"""
-    try:
-        from app.tools.feishu_tool import feishu_tool
-        from app.tools.file_parser_tool import file_parser_tool
-        from app.agent.workflow import agent
-        from app.monitoring import monitoring_stats
-        logger.info("[Feishu WS] Processor started")
-    except Exception as e:
-        logger.error("[Feishu WS] Failed to init processor: %s", str(e))
-        return
-
+    """消息处理线程（消费队列）"""
+    logger.info("[Feishu WS] Processor started")
     while True:
         try:
             msg = message_queue.get(timeout=1)
@@ -222,6 +171,7 @@ def process_messages():
             track_id = msg.get("track_id", "unknown")
             logger.info("[Feishu WS] [%s] Processing message", track_id)
 
+            # ---------- 文件下载与解析 ----------
             file_path = None
             file_content = None
             file_info = msg.get("file_info")
@@ -233,7 +183,14 @@ def process_messages():
                     save_path = f"data/uploads/{file_name}"
 
                     logger.info("[Feishu WS] [%s] Downloading file: %s", track_id, file_key)
-                    download_result = feishu_tool.download_file(file_key, save_path)
+                    # ============================================================
+                    # 改用 download_message_resource（支持用户消息中的附件）
+                    # ============================================================
+                    download_result = feishu_tool.download_message_resource(
+                        msg["message_id"],
+                        file_key,
+                        save_path
+                    )
 
                     if download_result.get("success"):
                         file_path = save_path
@@ -272,6 +229,7 @@ def process_messages():
                 except Exception as e:
                     logger.error("[Feishu WS] [%s] File error: %s", track_id, str(e))
 
+            # ---------- 调用 Agent ----------
             try:
                 agent_input = {
                     "user_input": msg["content"],
@@ -290,6 +248,7 @@ def process_messages():
                 logger.error("[Feishu WS] [%s] Agent error: %s", track_id, str(e))
                 answer = f"处理时出错：{str(e)}"
 
+            # ---------- 回复消息 ----------
             try:
                 feishu_tool.reply_message(msg["message_id"], answer)
                 logger.info("[Feishu WS] [%s] Reply sent", track_id)
@@ -303,21 +262,36 @@ def process_messages():
 
 
 def start_feishu_ws(app_id: str, app_secret: str):
-    """启动飞书 WebSocket 客户端"""
-    log_error(f"start_feishu_ws called with app_id={app_id[:8]}...")
+    """启动飞书 WebSocket 客户端（官方SDK版本）"""
     if not app_id or not app_secret:
         logger.error("[Feishu WS] No credentials provided")
         return
 
+    # 启动消息处理线程
     threading.Thread(target=process_messages, daemon=True).start()
     logger.info("[Feishu WS] Processor thread started")
 
+    # 创建事件处理器
+    event_handler = lark.EventDispatcherHandler.builder("", "") \
+        .register_p2_im_message_receive_v1(do_p2_im_message_receive_v1) \
+        .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(lambda x: None) \
+        .build()
+
+    # 创建 WebSocket 客户端
+    client = lark.ws.Client(
+        app_id=app_id,
+        app_secret=app_secret,
+        event_handler=event_handler,
+        log_level=lark.LogLevel.INFO
+    )
+
+    logger.info("[Feishu WS] Starting official WebSocket client...")
     try:
-        asyncio.run(feishu_ws_client(app_id, app_secret))
+        client.start()
+    except KeyboardInterrupt:
+        logger.info("[Feishu WS] Stopped by user")
     except Exception as e:
-        error_msg = f"Fatal error in asyncio.run: {str(e)}\n{traceback.format_exc()}"
-        logger.error("[Feishu WS] %s", error_msg)
-        log_error(error_msg)
+        logger.error("[Feishu WS] Failed to start: %s", str(e), exc_info=True)
 
 
 if __name__ == "__main__":

@@ -122,7 +122,7 @@ async def feishu_webhook(request: Request):
                 if file_key:
                     # 下载文件
                     save_path = f"data/uploads/{file_name}"
-                    download_result = feishu_tool.download_file(file_key, save_path)
+                    download_result = feishu_tool.download_message_resource(message_id, file_key, save_path)
 
                     if download_result.get("success"):
                         file_path = save_path
