@@ -1,9 +1,8 @@
-﻿import logging
-from langchain_openai import ChatOpenAI
+import logging
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.config import config
+from app.config import get_llm
 from app.prompts import ROUTER_PROMPT
 
 logger = logging.getLogger("router")
@@ -43,12 +42,7 @@ tools = [
 ]
 
 
-llm = ChatOpenAI(
-    model=config.OPENAI_MODEL_NAME,
-    temperature=config.LLM_TEMPERATURE,
-    api_key=config.OPENAI_API_KEY,
-    base_url=config.OPENAI_API_BASE,
-)
+llm = get_llm()
 
 
 llm_with_tools = llm.bind_tools(tools)
@@ -61,11 +55,12 @@ def router(state):
     history = state.get("history", [])
 
     # ============================================================
-    # 关键逻辑 1：如果检测到文件内容，直接路由到文件解析技能
+    # 关键逻辑 1: 如果检测到文件内容, 直接路由到文件解析技能
     # ============================================================
-    # 当用户上传了文件且文件已解析出内容时，或者用户明确要求解析文件时
+    # 当用户上传且文件已解析出内容时
+    # 或者用户明确要求解析文件时
     if file_path and file_content:
-        # 如果用户消息是空或是只有"[文件] xxx"，或者包含"解析"关键词
+        # 如果用户消息是空或者只有"[文件] xxx", 包含解析关键词
         is_empty_or_file_msg = (
             not user_input.strip()
             or user_input.strip().startswith("[文件]")
@@ -88,9 +83,9 @@ def router(state):
             return state
 
     # ============================================================
-    # 关键逻辑 2：将历史上下文注入到路由 Prompt 中
+    # 关键逻辑 2: 将历史上下文注入到路由 Prompt 中
     # ============================================================
-    # 构建历史上下文字符串（最近 5 条）
+    # 构建历史上下文字符串(最近 5 条)
     history_text = ""
     if history:
         history_lines = []
@@ -108,7 +103,7 @@ def router(state):
     if history_text:
         enhanced_prompt = (
             enhanced_prompt
-            + f'\n\n## 历史对话上下文\n{history_text}\n\n请基于以上历史对话理解用户意图。如果用户说"刚刚发的文档"、"刚才那个文件"等，应结合历史上下文判断。'
+            + f'\n\n## 历史对话上下文\n{history_text}\n\n请基于以上历史对话理解用户意图时如果用户说"刚刚发的文档"、"刚才那个文件"等，,应结合历史上下文判断。'
         )
 
     messages = [
@@ -123,7 +118,7 @@ def router(state):
         skill_name = tool_call["name"]
         params = tool_call["args"]
 
-        # 如果路由到 file_analysis_skill，同时传递文件信息
+        # 如果路由到 file_analysis_skill, 同时传递文件信息
         if skill_name == "file_analysis_skill" and file_path and file_content:
             params["file_path"] = file_path
             params["file_content"] = file_content

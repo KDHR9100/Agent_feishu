@@ -11,8 +11,8 @@ import sys
 # 导入项目内部模块
 from app.tools.feishu_tool import feishu_tool
 from app.tools.file_parser_tool import file_parser_tool
+from app.tools.guardrails import check_input
 from app.agent.workflow import agent
-from app.monitoring import monitoring_stats
 
 # 日志配置
 logging.basicConfig(
@@ -81,8 +81,8 @@ def do_p2_im_message_receive_v1(data):
             for m in mentions:
                 m_name = getattr(m, "name", "")
                 m_key = getattr(m, "key", "")
-                m_open_id = getattr(m, "open_id", "")
-                m_tenant_key = getattr(m, "tenant_key", "")
+                # m_open_id = getattr(m, "open_id", "")
+                # m_tenant_key = getattr(m, "tenant_key", "")
                 if (m_name and (m_name.lower() == bot_name_lower or bot_name_lower in m_name.lower())) or \
                    (m_key and (m_key == bot_name or bot_name in m_key)):
                     bot_mentioned = True
@@ -182,74 +182,64 @@ def process_messages():
             if file_info:
                 try:
                     file_key = file_info.get("file_key", "")
-                    file_name = file_info.get("file_name", "unknown")
+                    raw_file_name = file_info.get("file_name", "unknown")
+                    file_name = os.path.basename(raw_file_name)
+                    allowed_extensions = {".xlsx", ".xls", ".csv", ".pdf", ".docx"}
+                    _, file_ext = os.path.splitext(file_name)
+                    if file_ext.lower() not in allowed_extensions:
+                        logger.warning("[Feishu WS] [%s] Rejected file type: %s", track_id, file_ext)
+                        feishu_tool.reply_message(msg["message_id"], f"不支持的文件类型：{file_ext}，请上传 Excel/CSV/PDF/Word 文件。")
+                        continue
                     save_path = f"data/uploads/{file_name}"
 
+                    try:
+                        feishu_tool.reply_message(msg["message_id"], "\U0001f504 正在解析文件，请稍候...")
+                    except Exception:
+                        pass
+
                     logger.info("[Feishu WS] [%s] Downloading file: %s", track_id, file_key)
-                    # ============================================================
-                    # 使用 download_file 并传入 message_id
-                    # ============================================================
                     download_result = feishu_tool.download_file(
-                        file_key,
-                        save_path,
-                        message_id=msg["message_id"]  # 传入 message_id
+                        file_key, save_path, message_id=msg["message_id"]
                     )
 
                     if download_result.get("success"):
                         file_path = save_path
                         logger.info("[Feishu WS] [%s] File downloaded: %s", track_id, file_path)
-
                         parse_result = file_parser_tool.parse_local_file(file_path)
                         if parse_result.get("error"):
                             logger.error("[Feishu WS] [%s] Parse error: %s", track_id, parse_result.get("error"))
                         else:
-                            summary = parse_result.get("summary", {})
-                            columns = parse_result.get("columns", [])
-                            row_count = parse_result.get("row_count", 0)
-                            sample_rows = parse_result.get("sample_rows", [])
-
-                            content_parts = [
-                                f"文件信息: {file_name}",
-                                f"列: {', '.join(columns)}",
-                                f"行数: {row_count}",
-                                "数据摘要:"
-                            ]
-                            for col, info in summary.items():
-                                if info.get("type") == "numeric":
-                                    content_parts.append(f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}")
-                                else:
-                                    content_parts.append(f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}")
-
-                            if sample_rows:
-                                content_parts.append("数据样例 (前3行):")
-                                for i, row in enumerate(sample_rows):
-                                    content_parts.append(f"  第{i+1}行: {row}")
-
-                            file_content = "\n".join(content_parts)
-                            logger.info("[Feishu WS] [%s] File parsed: %d rows", track_id, row_count)
+                            file_content = file_parser_tool.format_file_summary(parse_result, file_name)
+                            logger.info("[Feishu WS] [%s] File parsed: %d rows", track_id, parse_result.get("row_count", 0))
                     else:
                         logger.warning("[Feishu WS] [%s] Download failed: %s", track_id, download_result.get("error"))
                 except Exception as e:
                     logger.error("[Feishu WS] [%s] File error: %s", track_id, str(e))
 
             # ---------- 调用 Agent ----------
-            try:
-                agent_input = {
-                    "user_input": msg["content"],
-                    "conversation_id": msg["chat_id"]
-                }
-                if file_path:
-                    agent_input["file_path"] = file_path
-                if file_content:
-                    agent_input["file_content"] = file_content
+            # Guardrails: input safety check
+            guardrails_result = check_input(msg["content"])
+            if guardrails_result["action"] in ("block", "redirect"):
+                answer = guardrails_result["message"]
+                logger.info("[Feishu WS] [%s] Guardrails: %s", track_id, guardrails_result["action"])
+            else:
+                try:
+                    agent_input = {
+                        "user_input": msg["content"],
+                        "conversation_id": msg["chat_id"]
+                        }
+                    if file_path:
+                        agent_input["file_path"] = file_path
+                    if file_content:
+                        agent_input["file_content"] = file_content
 
-                result = agent.invoke(agent_input)
-                answer = result.get("answer", "抱歉，我无法处理您的请求。")
-                logger.info("[Feishu WS] [%s] Agent done, answer length=%d", track_id, len(answer))
+                    result = agent.invoke(agent_input)
+                    answer = result.get("answer", "抱歉，我无法处理您的请求。")
+                    logger.info("[Feishu WS] [%s] Agent done, answer length=%d", track_id, len(answer))
 
-            except Exception as e:
-                logger.error("[Feishu WS] [%s] Agent error: %s", track_id, str(e))
-                answer = f"处理时出错：{str(e)}"
+                except Exception as e:
+                    logger.error("[Feishu WS] [%s] Agent error: %s", track_id, str(e))
+                    answer = "处理您的问题时出现内部错误，请稍后重试。"
 
             # ---------- 回复消息 ----------
             try:

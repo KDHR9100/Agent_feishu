@@ -113,4 +113,36 @@ class FileParserTool:
             'file_path': file_path,
         }
 
+
+    def format_file_summary(self, parse_result, file_name=""):
+        """将解析结果格式化为摘要文本，供多个调用方复用"""
+        if parse_result.get("error"):
+            return ""
+        summary = parse_result.get("summary", {})
+        columns = parse_result.get("columns", [])
+        row_count = parse_result.get("row_count", 0)
+        sample_rows = parse_result.get("sample_rows", [])
+        content_parts = [
+            f"文件信息: {file_name}",
+            f"列: {', '.join(columns)}",
+            f"行数: {row_count}",
+            "数据摘要:"
+        ]
+        for col, info in summary.items():
+            if info.get("type") == "numeric":
+                content_parts.append(
+                    f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, "
+                    f"最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}"
+                )
+            else:
+                content_parts.append(
+                    f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, "
+                    f"样例={info.get('sample_values', [])}"
+                )
+        if sample_rows:
+            content_parts.append("数据样例 (前3行):")
+            for i, row in enumerate(sample_rows):
+                content_parts.append(f"  第{i+1}行: {row}")
+        return "\n".join(content_parts)
+
 file_parser_tool = FileParserTool()

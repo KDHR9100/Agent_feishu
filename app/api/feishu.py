@@ -201,7 +201,7 @@ async def feishu_webhook(request: Request):
             logger.warning("[Feishu] [%s] Empty message", track_id)
             return {"status": "ignored", "reason": "empty content"}
 
-        user_input = text_content if text_content else f"请分析我上传的文件"
+        user_input = text_content if text_content else "请分析我上传的文件"
 
         logger.info(
             "[Feishu] [%s] User=%s, Chat=%s, Input=%s",
@@ -241,7 +241,7 @@ async def feishu_webhook(request: Request):
 
         except Exception as e:
             logger.error("[Feishu] [%s] Agent error: %s", track_id, str(e))
-            answer = f"处理您的问题时出错：{str(e)}"
+            answer = "处理您的问题时出现内部错误，请稍后重试。"
 
         # ============================================================
         # 5. 回复飞书
@@ -262,7 +262,7 @@ async def feishu_webhook(request: Request):
 
     except Exception as e:
         logger.exception("[Feishu] [%s] Webhook failed: %s", track_id, str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
 
 
 @router.post("/message")
@@ -272,8 +272,8 @@ async def send_message(request: MessageRequest):
             result = feishu_tool.send_message(request.chat_id, request.content)
             return {"status": "success", "response": result}
         return {"status": "failed", "message": "Feishu credentials not configured"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="消息发送失败，请稍后重试")
 
 
 @router.post("/chat")
@@ -295,5 +295,5 @@ async def chat_with_agent(request: Request):
             "answer": result.get("answer", ""),
             "conversation_id": conversation_id,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="处理请求时出错，请稍后重试")

@@ -53,3 +53,11 @@ ENV/
 app.log
 *.log
 .tree
+
+# Private data files (keep directory structure, exclude content)
+data/uploads/*
+!data/uploads/.gitkeep
+data/vectorstore/faiss_index/*
+!data/vectorstore/faiss_index/.gitkeep
+data/vectorstore/doc_hashes.json
+data/vectorstore/query_cache.json

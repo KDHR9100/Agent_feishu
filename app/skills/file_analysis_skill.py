@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from app.config import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -9,7 +10,7 @@ def file_analysis_skill(
     user_input: str, file_path: str = None, file_content: str = None
 ) -> dict:
     """
-    文件解析技能：接收文件路径和已解析的内容，生成分析报告
+    文件解析技能：接收文件路径和已解析的内容，生成结构化分析报告
     """
     if not file_content:
         return {
@@ -17,7 +18,8 @@ def file_analysis_skill(
             "data": "未收到有效的文件内容，请重新上传文件。",
         }
 
-    # 构建分析 prompt
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     system_prompt = (
         "你是一个专业的数据分析师。用户上传了一个数据文件，以下是文件的解析结果。\n"
         "请根据文件内容，为用户提供有价值的分析，包括：\n"
@@ -25,7 +27,8 @@ def file_analysis_skill(
         "2. 关键数据洞察（如趋势、异常值、高价值信息等）\n"
         "3. 针对电商业务场景的建议（如适用）\n"
         "4. 如果有用户的具体问题，针对性回答\n\n"
-        "请用清晰、专业但易懂的中文回复。如果数据中有表格，适当引用具体数值。"
+        "请用清晰、专业但易懂的中文回复。如果数据中有表格，适当引用具体数值。\n"
+        "回复格式要求：使用 Markdown 格式，包含标题、分段、适当使用 Emoji 让报告更易读。"
     )
 
     user_prompt = f"""用户的问题：{user_input if user_input else "请分析这份数据"}
@@ -33,7 +36,7 @@ def file_analysis_skill(
 以下是文件解析结果：
 {file_content}
 
-请根据以上数据进行分析和回答。如果用户的问题不明确，给出数据概要和建议。"""
+请根据以上数据进行分析和回答。如果用户的问题不明确，给出数据概括和建议。"""
 
     try:
         llm = get_llm()
@@ -45,7 +48,7 @@ def file_analysis_skill(
 
         reply = response.content if hasattr(response, "content") else str(response)
 
-        # 记录 token 使用（可选）
+        # 记录 token 使用
         if hasattr(response, "response_metadata") and response.response_metadata:
             token_usage = response.response_metadata.get("token_usage", {})
             logger.info(
@@ -57,12 +60,25 @@ def file_analysis_skill(
                 )
             )
 
-        return {"type": "file_analysis", "data": reply}
+        # 结构化包装回复
+        separator = '\u2500' * 30
+        formatted_reply = (
+            f"\U0001f4ca **数据分析报告**\n"
+            f"\U0001f550 生成时间：{timestamp}\n"
+            f"{separator}\n\n"
+            f"{reply}\n\n"
+            f"{separator}\n"
+            f"\U0001f4a1 如需进一步分析，请随时告诉我。"
+        )
+
+        return {"type": "file_analysis", "data": formatted_reply}
 
     except Exception as e:
         logger.error("[FileAnalysisSkill] Error: %s" % str(e))
-        return {"type": "file_analysis", "data": f"分析文件时出错：{str(e)}"}
+        return {
+            "type": "file_analysis",
+            "data": "分析文件时出错，请稍后重试或检查文件格式。",
+        }
 
 
-# 导出技能实例（可选，保持与项目中其他 skill 一致）
 file_analysis_skill = file_analysis_skill

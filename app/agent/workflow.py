@@ -1,8 +1,8 @@
-﻿import re
+import re
 import logging
 import time
 from langgraph.graph import StateGraph
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
 from .state import AgentState
 from .router import router
@@ -63,36 +63,12 @@ def load_file(state):
             state["file_content"] = None
         else:
             # 将解析结果格式化为文本，方便后续 LLM 使用
-            summary = result.get("summary", {})
-            columns = result.get("columns", [])
-            row_count = result.get("row_count", 0)
-            sample_rows = result.get("sample_rows", [])
-
-            content_parts = [
-                f"文件信息: {file_path}",
-                f"列: {', '.join(columns)}",
-                f"行数: {row_count}",
-                "数据摘要:",
-            ]
-            for col, info in summary.items():
-                if info.get("type") == "numeric":
-                    content_parts.append(
-                        f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}"
-                    )
-                else:
-                    content_parts.append(
-                        f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}"
-                    )
-
-            if sample_rows:
-                content_parts.append("数据样例 (前3行):")
-                for i, row in enumerate(sample_rows):
-                    content_parts.append(f"  第{i+1}行: {row}")
-
-            state["file_content"] = "\n".join(content_parts)
+            state["file_content"] = file_parser_tool.format_file_summary(
+                result, os.path.basename(file_path)
+            )
             logger.info(
-                "[Workflow] File parsed successfully: %s, %d rows, %d columns"
-                % (file_path, row_count, len(columns))
+                "[Workflow] File parsed successfully: %s, %d rows"
+                % (file_path, result.get("row_count", 0))
             )
 
     except Exception as e:
@@ -159,10 +135,20 @@ def skill_executor(state):
                 "please answer directly in Chinese in a friendly manner."
             )
         )
-        human_msg = HumanMessage(content=user_input)
+        messages = [system_msg]
+        history = state.get("history", [])
+        for msg in history:
+            role = msg.get("role", "")
+            msg_content = msg.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=msg_content))
+            elif role == "assistant":
+                messages.append(AIMessage(content=msg_content))
+        messages.append(HumanMessage(content=user_input))
+
         llm_start = time.time()
         try:
-            response = _call_llm(llm, [system_msg, human_msg])
+            response = _call_llm(llm, messages)
             llm_duration = time.time() - llm_start
             monitoring_stats.record_llm_call(llm_duration)
 

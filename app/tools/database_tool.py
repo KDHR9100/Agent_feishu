@@ -1,4 +1,4 @@
-﻿from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta

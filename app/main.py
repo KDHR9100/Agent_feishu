@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -11,11 +12,36 @@ from app.monitoring import monitoring_stats
 
 app = FastAPI(title="Ecommerce Agent", version="1.0.0")
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler - catches all unhandled exceptions"""
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, str(exc))
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "message": "An unexpected error occurred, please try again later"}
+    )
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    """Handle ValueError - common in data parsing"""
+    logger.warning("ValueError on %s %s: %s", request.method, request.url.path, str(exc))
+    return JSONResponse(
+        status_code=400,
+        content={"error": "Bad request", "message": "Invalid input format"}
+    )
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -101,7 +127,7 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error("Chat error: %s" % str(e), exc_info=True)
         monitoring_stats.record_skill_call("chat", 0, success=False)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
 
 
 @app.post("/rag/query")
@@ -125,7 +151,7 @@ async def rag_query(request: RAGRequest):
     except Exception as e:
         logger.error("RAG query error: %s" % str(e), exc_info=True)
         monitoring_stats.record_rag_query(0, success=False)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="RAG 查询失败，请稍后重试")
 
 
 feishu_ws_process = None
@@ -133,7 +159,6 @@ feishu_ws_process = None
 
 @app.on_event("startup")
 async def startup_event():
-    global feishu_ws_process
 
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Starting...")
@@ -238,7 +263,6 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global feishu_ws_process
 
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Shutting Down...")
@@ -263,3 +287,50 @@ if __name__ == "__main__":
     uvicorn.run(
         app, host="127.0.0.1", port=config.APP_PORT, log_level=config.LOG_LEVEL.lower()
     )
+
+
+# ============================================================
+# Document Management & RAG API
+# ============================================================
+
+@app.get("/documents")
+async def list_documents():
+    """List all documents in the document folder."""
+    from app.rag.doc_manager import doc_vector_manager
+    return doc_vector_manager.get_status()
+
+
+@app.post("/documents")
+async def add_document(name: str, content: str):
+    """Add a new document and sync vector store."""
+    from app.rag.doc_manager import doc_vector_manager
+    doc_vector_manager.doc_manager.add_document(name, content)
+    result = doc_vector_manager.sync()
+    return {"status": "added", "name": name, "sync": result}
+
+
+@app.delete("/documents/{name}")
+async def delete_document(name: str):
+    """Delete a document and sync vector store."""
+    from app.rag.doc_manager import doc_vector_manager
+    deleted = doc_vector_manager.doc_manager.delete_document(name)
+    if not deleted:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Document not found")
+    result = doc_vector_manager.sync()
+    return {"status": "deleted", "name": name, "sync": result}
+
+
+@app.post("/rag/sync")
+async def sync_vector_store(force: bool = False):
+    """Sync documents with vector store."""
+    from app.rag.doc_manager import doc_vector_manager
+    result = doc_vector_manager.sync(force_rebuild=force)
+    return result
+
+
+@app.get("/rag/status")
+async def rag_status():
+    """Get RAG system status."""
+    from app.rag.doc_manager import doc_vector_manager
+    return doc_vector_manager.get_status()
