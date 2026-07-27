@@ -1,0 +1,81 @@
+============================================================
+FeishuAgent｜飞书智能业务助手（简历项目描述 - 更新版）
+============================================================
+
+项目地址：https://github.com/KDHR9100/Agent_feishu
+
+【项目背景】
+针对电商运营团队日常工作中数据处理繁琐、信息获取低效、跨系统协作困难的问题，
+设计并实现了一套基于大语言模型的飞书智能业务助手。系统通过飞书 WebSocket 长连接
+实时接收群聊消息，基于 LangGraph 有向状态图工作流自动识别用户意图并路由到相应
+业务技能，支持商品分析、广告分析、文案生成、库存预警、竞品分析、报告生成、
+RAG 知识库问答等 9 大业务场景，实现电商运营全流程智能化。
+
+【项目职责】
+独立负责系统全链路设计与开发，涵盖 LangGraph Agent 工作流架构设计、LLM Tool-Calling
+意图路由实现、9 大业务技能模块开发、飞书 API 全链路集成、RAG 知识库管道构建、
+定时任务系统、WebSocket 进程管理器、会话记忆持久化，以及 CI/CD 流水线搭建。
+
+【关键技术】
+Python、LangChain、LangGraph、Qwen、FastAPI、FAISS、sentence-transformers、
+飞书开放平台、APScheduler、Pandas、OpenPyXL、pytest、GitHub Actions
+
+【技术方案】
+
+1. 基于 LangGraph 的 7 节点有向状态图工作流：
+   基于 LangGraph StateGraph 构建 7 节点有向状态图（历史加载→文件解析→意图路由→
+   技能执行→反思→回答→历史保存），定义 AgentState（TypedDict）管理 12 个状态字段，
+   通过条件边实现 ReAct 反思循环——LLM 判断执行结果质量，不满意时回边重试路由，
+   最大重试 2 次防止死循环。
+
+2. LLM Tool-Calling 驱动的 9 技能路由：
+   将业务技能包装为 LangChain StructuredTool，通过 llm.bind_tools() 注册为 LLM
+   可调用的工具，利用模型原生 function calling 能力进行意图识别和技能选择。设计
+   三级路由优先级：文件场景规则短路 > Guardrails 关键词护栏 > LLM Tool-Calling 路由。
+   Router 支持一次选择多个技能并行执行（Fan-out），Answer 节点对多技能结果调用 LLM
+   生成综合回答。
+
+3. RAG 检索增强管道：
+   基于 FAISS 向量数据库和 sentence-transformers 本地 Embedding 构建电商领域
+   知识库，设计三级降级 Embedding 策略（本地→DashScope 云端→Mock）；采用 MMR
+   多样性检索（fetch_k=10, lambda_mult=0.5）；实现基于 SHA-256 的文档变更检测、
+   增量索引更新和查询缓存自动失效机制（TTL=3600s）；文本分块采用中文标点感知的
+   RecursiveCharacterTextSplitter（chunk_size=512, overlap=100）。
+
+4. 飞书 WebSocket 集成与进程自愈：
+   基于飞书官方 lark-oapi SDK 建立 WebSocket 长连接，采用生产者-消费者模式
+   （Queue 解耦）处理消息事件；实现 WebSocketProcessManager 进程管理器，提供
+   健康检查（每 10 秒检测）、自动重启（最多 5 次、30 秒冷却期）和状态监控 API。
+
+5. 工程化保障体系：
+   - 安全：输入安全护栏（关键词拦截+话题重定向）、路径穿越防护（_safe_path 全覆盖）
+   - 记忆：SQLite 持久化 + LRU 淘汰（max 1000 会话）、内存+DB 双写
+   - 定时：APScheduler 实现库存预警（每 4 小时）和日报生成（每日 09:00）
+   - 监控：线程安全指标系统覆盖 LLM/Embedding/Feishu/RAG/DB 五类调用
+   - CI/CD：GitHub Actions 自动 lint + test + security scan
+
+【技术亮点】
+
+1. LangGraph ReAct 反思闭环：
+   不同于简单链式调用，通过 StateGraph 条件边实现"执行→反思→重试"闭环，
+   LLM 自主判断结果质量并决策是否重新路由，提升复杂查询下的回答准确性。
+
+2. RAG 增量索引与缓存失效：
+   基于 SHA-256 文档哈希实现变更检测，仅更新变化的文档向量，配合查询缓存
+   自动失效机制，在保证数据一致性的同时降低索引更新成本。
+
+3. 进程级自愈与全链路可观测：
+   WebSocket 客户端崩溃后自动重启（最多 5 次、30 秒冷却），实现 7×24 稳定运行；
+   线程安全监控覆盖 LLM/Embedding/Feishu/RAG/DB 全链路，支持 Token 消耗追踪
+   和意图分布统计。
+
+【项目成果】
+- 完成基于 LangGraph 的端到端飞书智能助手，实现 9 大业务技能覆盖电商运营
+  主要场景，支持自然语言交互和多格式文件处理
+- RAG 评测验证：20 道电商问题测试集，召回率 78.3%，平均延迟 11.3ms，
+  增量索引降低约 80% 更新耗时
+- WebSocket 进程自愈机制保障 7×24 稳定运行，崩溃后秒级自动恢复
+- 53 项单元测试覆盖安全/功能/架构/调度器/进程管理/会话记忆全模块
+- GitHub Actions CI/CD 流水线实现自动 lint + test + security scan
+
+============================================================

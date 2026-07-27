@@ -150,7 +150,8 @@ class FeishuTool:
                 # IM 资源下载 API（添加 type=file 参数）
                 encoded_message_id = urllib.parse.quote(message_id, safe='')
                 encoded_file_key = urllib.parse.quote(file_key, safe='')
-                url = f"https://open.feishu.cn/open-apis/im/v1/messages/{encoded_message_id}/resources/{encoded_file_key}?type=file"
+                base_url = "https://open.feishu.cn/open-apis/im/v1/messages"
+                url = f"{base_url}/{encoded_message_id}/resources/{encoded_file_key}?type=file"
                 logger.info("[FeishuTool] Download URL: %s", url)
 
                 response = requests.get(url, headers=headers, timeout=60)

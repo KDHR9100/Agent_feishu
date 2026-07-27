@@ -14,7 +14,6 @@ import json
 import hashlib
 import time
 import shutil
-from typing import Optional
 
 from app.config import logger
 

@@ -78,7 +78,7 @@ def product_skill(user_input: str):
 
         all_products = db_tool.get_all_products()
         categories = db_tool.get_product_categories()
-    except Exception as e:
+    except Exception:
         db_data = []
         all_products = []
         categories = []

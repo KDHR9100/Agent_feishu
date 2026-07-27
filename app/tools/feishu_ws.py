@@ -41,10 +41,14 @@ def do_p2_im_message_receive_v1(data):
         # ---- 兼容多种属性名 ----
         message_id = getattr(message, "message_id", None) or getattr(message, "id", "")
         chat_id = getattr(message, "chat_id", None) or getattr(message, "group_id", "")
-        msg_type = getattr(message, "msg_type", None) or getattr(message, "message_type", None) or getattr(message, "type", "")
+        msg_type = (
+            getattr(message, "msg_type", None)
+            or getattr(message, "message_type", None)
+            or getattr(message, "type", "")
+        )
         content_raw = getattr(message, "content", "") or getattr(message, "raw_content", "")
         mentions = getattr(message, "mentions", []) or getattr(event, "mentions", [])
-        
+
         # 打印消息ID用于调试
         logger.info("[Feishu WS] [%s] message_id=%s", track_id, message_id)
 
@@ -126,7 +130,12 @@ def do_p2_im_message_receive_v1(data):
                     content_json = json.loads(content_raw)
                 else:
                     content_json = content_raw
-                file_key = content_json.get("file_key") or content_json.get("file_token") or content_json.get("media_id") or ""
+                file_key = (
+                    content_json.get("file_key")
+                    or content_json.get("file_token")
+                    or content_json.get("media_id")
+                    or ""
+                )
                 file_name = content_json.get("file_name", "unknown")
                 file_size = content_json.get("file_size", 0)
                 if file_key:
@@ -210,7 +219,9 @@ def process_messages():
                             logger.error("[Feishu WS] [%s] Parse error: %s", track_id, parse_result.get("error"))
                         else:
                             file_content = file_parser_tool.format_file_summary(parse_result, file_name)
-                            logger.info("[Feishu WS] [%s] File parsed: %d rows", track_id, parse_result.get("row_count", 0))
+                            logger.info(
+                                "[Feishu WS] [%s] File parsed: %d rows",
+                                track_id, parse_result.get("row_count", 0))
                     else:
                         logger.warning("[Feishu WS] [%s] Download failed: %s", track_id, download_result.get("error"))
                 except Exception as e:

@@ -5,13 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import time
-import subprocess
-import sys
 
 from app.config import config, logger, log_config_info
 from app.monitoring import monitoring_stats
 
 app = FastAPI(title="Ecommerce Agent", version="1.0.0")
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -116,6 +115,7 @@ async def chat(request: ChatRequest):
         monitoring_stats.record_skill_call("chat", 0, success=False)
         raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
 
+
 @app.post("/rag/query")
 async def rag_query(request: RAGRequest):
     try:
@@ -138,9 +138,6 @@ async def rag_query(request: RAGRequest):
         logger.error("RAG query error: %s" % str(e), exc_info=True)
         monitoring_stats.record_rag_query(0, success=False)
         raise HTTPException(status_code=500, detail="RAG 查询失败，请稍后重试")
-
-
-feishu_ws_process = None
 
 
 @app.on_event("startup")
@@ -216,30 +213,22 @@ async def startup_event():
     #         logger.error("Failed to load Feishu router: %s" % str(e), exc_info=True)
 
     try:
-        logger.info("Starting Feishu WebSocket client...")
-        if config.FEISHU_APP_ID and config.FEISHU_APP_SECRET:
-            feishu_ws_process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "app.tools.feishu_ws",
-                    config.FEISHU_APP_ID,
-                    config.FEISHU_APP_SECRET,
-                ],
-                stdout=None,
-                stderr=None,
-                text=True,
-            )
-            logger.info(
-                "Feishu WebSocket client started in separate process (PID: %d)"
-                % feishu_ws_process.pid
-            )
-        else:
-            logger.warning("Feishu credentials not configured, skipping WS client")
+        logger.info("Starting Feishu WebSocket client with health monitor...")
+        from app.tools.ws_manager import ws_manager
+        ws_manager.start(config.FEISHU_APP_ID, config.FEISHU_APP_SECRET)
     except Exception as e:
         logger.error(
             "Failed to start Feishu WebSocket client: %s" % str(e), exc_info=True
         )
+
+    # 启动定时任务调度器
+    try:
+        logger.info("Starting TaskScheduler...")
+        from app.tasks import task_scheduler
+        task_scheduler.start()
+        logger.info("TaskScheduler started successfully")
+    except Exception as e:
+        logger.error("Failed to start TaskScheduler: %s" % str(e), exc_info=True)
 
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Started Successfully")
@@ -254,16 +243,20 @@ async def shutdown_event():
     logger.info("Ecommerce Agent Service Shutting Down...")
     logger.info("=" * 60)
 
-    if feishu_ws_process:
-        try:
-            logger.info(
-                "Stopping Feishu WebSocket client (PID: %d)..." % feishu_ws_process.pid
-            )
-            feishu_ws_process.terminate()
-            feishu_ws_process.wait(timeout=5)
-            logger.info("Feishu WebSocket client stopped")
-        except Exception as e:
-            logger.error("Failed to stop Feishu WS client: %s" % str(e), exc_info=True)
+    # 停止定时任务调度器
+    try:
+        from app.tasks import task_scheduler
+        task_scheduler.stop()
+        logger.info("TaskScheduler stopped")
+    except Exception as e:
+        logger.error("Failed to stop TaskScheduler: %s" % str(e), exc_info=True)
+
+    try:
+        from app.tools.ws_manager import ws_manager
+        ws_manager.stop()
+        logger.info("Feishu WebSocket client stopped")
+    except Exception as e:
+        logger.error("Failed to stop Feishu WS client: %s" % str(e), exc_info=True)
 
 
 if __name__ == "__main__":
@@ -273,6 +266,20 @@ if __name__ == "__main__":
     uvicorn.run(
         app, host="127.0.0.1", port=config.APP_PORT, log_level=config.LOG_LEVEL.lower()
     )
+
+
+@app.get("/ws/status")
+async def ws_status():
+    """Get WebSocket client status."""
+    from app.tools.ws_manager import ws_manager
+    return ws_manager.get_status()
+
+
+@app.get("/tasks/status")
+async def tasks_status():
+    """Get scheduled tasks status."""
+    from app.tasks import task_scheduler
+    return task_scheduler.get_status()
 
 
 # ============================================================

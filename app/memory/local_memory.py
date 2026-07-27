@@ -1,4 +1,5 @@
 import logging
+from collections import OrderedDict
 from typing import List, Dict
 from datetime import datetime
 
@@ -6,15 +7,15 @@ logger = logging.getLogger("local_memory")
 
 
 class LocalMemory:
-    def __init__(self, max_history: int = 10):
-        self.conversations: Dict[str, List[Dict]] = {}
+    def __init__(self, max_history: int = 10, max_conversations: int = 1000):
+        self.conversations: OrderedDict[str, List[Dict]] = OrderedDict()
         self.max_history = max_history
+        self.max_conversations = max_conversations
         self._db_available = self._check_db()
 
     def _check_db(self) -> bool:
         try:
             from app.models.database import engine, Base
-            from app.models.models import Conversation
             Base.metadata.create_all(bind=engine)
             logger.info("[memory] SQLite persistence enabled")
             return True
@@ -41,7 +42,8 @@ class LocalMemory:
                     .all()
                 )
                 return [
-                    {"role": r.role, "content": r.content, "timestamp": r.created_at.isoformat() if r.created_at else ""}
+                    {"role": r.role, "content": r.content,
+                     "timestamp": r.created_at.isoformat() if r.created_at else ""}
                     for r in rows
                 ]
             finally:
@@ -96,6 +98,19 @@ class LocalMemory:
         except Exception as e:
             logger.warning("[memory] DB trim error: %s", e)
 
+    def _evict_lru(self):
+        """淘汰最久未使用的会话（LRU）"""
+        if len(self.conversations) <= self.max_conversations:
+            return
+        # OrderedDict: oldest item is at the front
+        evicted_id, _ = self.conversations.popitem(last=False)
+        logger.info("[memory] LRU evicted conversation: %s", evicted_id)
+
+    def _touch(self, conversation_id: str):
+        """标记会话为最近使用（移到 OrderedDict 末尾）"""
+        if conversation_id in self.conversations:
+            self.conversations.move_to_end(conversation_id)
+
     def add_message(self, conversation_id: str, role: str, content: str):
         if conversation_id not in self.conversations:
             db_history = self._load_from_db(conversation_id)
@@ -103,10 +118,14 @@ class LocalMemory:
                 self.conversations[conversation_id] = db_history
             else:
                 self.conversations[conversation_id] = []
+            self._evict_lru()
+
         self.conversations[conversation_id].append(
             {"role": role, "content": content, "timestamp": datetime.now().isoformat()}
         )
+        self._touch(conversation_id)
         self._save_to_db(conversation_id, role, content)
+
         if len(self.conversations[conversation_id]) > self.max_history:
             self.conversations[conversation_id] = self.conversations[conversation_id][-self.max_history:]
             self._trim_db(conversation_id)
@@ -116,8 +135,10 @@ class LocalMemory:
             db_history = self._load_from_db(conversation_id)
             if db_history:
                 self.conversations[conversation_id] = db_history
+                self._evict_lru()
                 return db_history
             return []
+        self._touch(conversation_id)
         return self.conversations.get(conversation_id, [])
 
     def get_last_n_messages(self, conversation_id: str, n: int = 5) -> List[Dict]:
@@ -147,6 +168,15 @@ class LocalMemory:
         for msg in history:
             formatted += f"{msg['role']}: {msg['content']}\n"
         return formatted
+
+    def get_stats(self) -> dict:
+        """获取内存使用统计"""
+        return {
+            "active_conversations": len(self.conversations),
+            "max_conversations": self.max_conversations,
+            "max_history_per_conversation": self.max_history,
+            "total_messages": sum(len(msgs) for msgs in self.conversations.values()),
+        }
 
 
 local_memory = LocalMemory()

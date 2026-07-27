@@ -63,7 +63,8 @@ ROUTER_PROMPT = """
 注意：
 
 - skill字段必须是以下之一：
-product_skill, ads_skill, content_skill, help_skill, file_analysis_skill, inventory_skill, competitor_skill, report_skill, rag_skill, unknown
+product_skill, ads_skill, content_skill, help_skill,
+file_analysis_skill, inventory_skill, competitor_skill, report_skill, rag_skill, unknown
 
 - parameters字段用于传递给Skill的参数，根据用户输入提取关键信息。
 

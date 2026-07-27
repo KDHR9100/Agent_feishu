@@ -52,6 +52,65 @@ class TestLocalMemory:
         assert "assistant: 回答" in formatted
 
 
+
+
+class TestMemoryLRU:
+    def test_lru_eviction_on_max_conversations(self):
+        """超过 max_conversations 时淘汰最久未使用的会话"""
+        from app.memory.local_memory import LocalMemory
+        mem = LocalMemory(max_history=10, max_conversations=3)
+        mem.add_message("conv_1", "user", "hello 1")
+        mem.add_message("conv_2", "user", "hello 2")
+        mem.add_message("conv_3", "user", "hello 3")
+        mem.add_message("conv_4", "user", "hello 4")
+        # conv_1 should be evicted
+        assert "conv_1" not in mem.conversations
+        assert "conv_4" in mem.conversations
+
+    def test_lru_touch_updates_order(self):
+        """访问会话更新 LRU 顺序，不被淘汰"""
+        from app.memory.local_memory import LocalMemory
+        mem = LocalMemory(max_history=10, max_conversations=3)
+        mem.add_message("conv_1", "user", "hello 1")
+        mem.add_message("conv_2", "user", "hello 2")
+        mem.add_message("conv_3", "user", "hello 3")
+        # Access conv_1 to make it recently used
+        mem.get_history("conv_1")
+        # Add conv_4, should evict conv_2 (oldest untouched)
+        mem.add_message("conv_4", "user", "hello 4")
+        assert "conv_2" not in mem.conversations
+        assert "conv_1" in mem.conversations
+
+    def test_get_stats(self):
+        """get_stats 返回正确的统计信息"""
+        import os
+        os.environ["DATABASE_URL"] = "sqlite:///./test_lru_stats.db"
+        from app.memory.local_memory import LocalMemory
+        mem = LocalMemory(max_history=10, max_conversations=100)
+        # Use unique conversation IDs to avoid cross-test pollution
+        import uuid
+        c1 = f"stats_{uuid.uuid4().hex[:8]}"
+        c2 = f"stats_{uuid.uuid4().hex[:8]}"
+        mem.add_message(c1, "user", "hello")
+        mem.add_message(c1, "assistant", "hi")
+        mem.add_message(c2, "user", "test")
+        stats = mem.get_stats()
+        assert stats["active_conversations"] >= 2
+        assert stats["total_messages"] >= 3
+        assert stats["max_conversations"] == 100
+        # Cleanup
+        if os.path.exists("test_lru_stats.db"):
+            os.remove("test_lru_stats.db")
+
+    def test_no_eviction_below_max(self):
+        """未达到 max_conversations 时不淘汰"""
+        from app.memory.local_memory import LocalMemory
+        mem = LocalMemory(max_history=10, max_conversations=5)
+        for i in range(5):
+            mem.add_message(f"conv_{i}", "user", f"hello {i}")
+        assert len(mem.conversations) == 5
+
+
 class TestMemoryPersistence:
     def test_persistence_across_instances(self):
         from app.memory.local_memory import LocalMemory

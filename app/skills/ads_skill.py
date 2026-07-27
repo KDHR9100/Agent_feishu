@@ -87,7 +87,7 @@ def ads_skill(user_input: str):
 
         platform_data = db_tool.get_ads_by_platform()
         campaign_data = db_tool.get_campaign_performance()
-    except Exception as e:
+    except Exception:
         db_data = []
         platform_data = []
         campaign_data = []

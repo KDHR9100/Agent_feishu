@@ -13,7 +13,7 @@ import json
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
-from app.rag.vectorstore import vector_store
+from app.rag.vectorstore import vector_store  # noqa: E402
 
 
 # 20 test questions about e-commerce platform rules
@@ -132,7 +132,9 @@ def evaluate_rag():
 
     print("\nBy Category:")
     for cat, stats in categories.items():
-        print("  %s: %d/%d (%.0f%%)" % (cat, stats["correct"], stats["total"], stats["correct"] * 100.0 / stats["total"]))
+        print("  %s: %d/%d (%.0f%%)" % (
+            cat, stats["correct"], stats["total"],
+            stats["correct"] * 100.0 / stats["total"]))
 
     # Average recall
     recalls = [r.get("recall", 0) for r in results if "recall" in r]

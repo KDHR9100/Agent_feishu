@@ -155,11 +155,14 @@ async def feishu_webhook(request: Request):
                             for col, info in summary.items():
                                 if info.get("type") == "numeric":
                                     content_parts.append(
-                                        f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, 最大={info.get('max', 'N/A')}, 最小={info.get('min', 'N/A')}"
+                                        (f"  - {col}: 均值={info.get('mean', 'N/A'):.2f}, "
+                                         f"最大={info.get('max', 'N/A')}, "
+                                         f"最小={info.get('min', 'N/A')}")
                                     )
                                 else:
                                     content_parts.append(
-                                        f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, 样例={info.get('sample_values', [])}"
+                                        (f"  - {col}: 去重数={info.get('unique_count', 'N/A')}, "
+                                         f"样例={info.get('sample_values', [])}")
                                     )
 
                             if sample_rows:

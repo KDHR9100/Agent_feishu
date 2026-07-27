@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from typing import Dict, Any
 
+
 class FileParserTool:
     def parse_local_file(self, file_path: str) -> Dict[str, Any]:
         if not os.path.exists(file_path):
@@ -113,7 +114,6 @@ class FileParserTool:
             'file_path': file_path,
         }
 
-
     def format_file_summary(self, parse_result, file_name=""):
         """将解析结果格式化为摘要文本，供多个调用方复用"""
         if parse_result.get("error"):
@@ -144,5 +144,6 @@ class FileParserTool:
             for i, row in enumerate(sample_rows):
                 content_parts.append(f"  第{i+1}行: {row}")
         return "\n".join(content_parts)
+
 
 file_parser_tool = FileParserTool()
