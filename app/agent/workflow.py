@@ -139,6 +139,21 @@ def _run_rag_skill(user_input, file_path, file_content, tool_result):
     return rag_skill(user_input)
 
 
+def _run_seo_skill(user_input, file_path, file_content, tool_result):
+    from app.skills.seo_skill import seo_skill
+    return seo_skill(user_input)
+
+
+def _run_support_skill(user_input, file_path, file_content, tool_result):
+    from app.skills.support_skill import support_skill
+    return support_skill(user_input)
+
+
+def _run_data_analysis_skill(user_input, file_path, file_content, tool_result):
+    from app.skills.data_analysis_skill import data_analysis_skill
+    return data_analysis_skill(user_input)
+
+
 SKILL_REGISTRY = {
     "product_skill": _run_product_skill,
     "ads_skill": _run_ads_skill,
@@ -149,6 +164,9 @@ SKILL_REGISTRY = {
     "competitor_skill": _run_competitor_skill,
     "report_skill": _run_report_skill,
     "rag_skill": _run_rag_skill,
+    "seo_skill": _run_seo_skill,
+    "support_skill": _run_support_skill,
+    "data_analysis_skill": _run_data_analysis_skill,
 }
 
 

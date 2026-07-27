@@ -46,6 +46,16 @@ ROUTER_PROMPT = """
 9. rag_skill - 知识库问答
 基于RAG检索增强的知识库问答，用于回答业务知识相关问题。
 
+10. seo_skill - SEO优化
+用于关键词分析、搜索量查询、标题优化、长尾词推荐、SEO策略建议等。
+
+11. support_skill - 客服支持
+用于处理订单查询、物流跟踪、退换货、售后问题、产品咨询等客服场景。
+
+12. data_analysis_skill - 数据分析
+用于深度数据分析、趋势分析、异常检测、统计报告生成、数据可视化解读等。
+支持自动查询数据库中的商品/广告/库存数据进行分析。
+
 
 请根据用户输入的意图，选择最合适的Skill。
 
@@ -64,7 +74,8 @@ ROUTER_PROMPT = """
 
 - skill字段必须是以下之一：
 product_skill, ads_skill, content_skill, help_skill,
-file_analysis_skill, inventory_skill, competitor_skill, report_skill, rag_skill, unknown
+file_analysis_skill, inventory_skill, competitor_skill, report_skill,
+rag_skill, seo_skill, support_skill, data_analysis_skill, unknown
 
 - parameters字段用于传递给Skill的参数，根据用户输入提取关键信息。
 
@@ -135,6 +146,36 @@ file_analysis_skill, inventory_skill, competitor_skill, report_skill, rag_skill,
 "文档搜索"
 
 应该调用 rag_skill。
+
+用户包含：
+"SEO"
+"关键词"
+"搜索排名"
+"标题优化"
+"长尾词"
+
+应该调用 seo_skill。
+
+用户包含：
+"订单"
+"物流"
+"退货"
+"退款"
+"售后"
+"客服"
+"投诉"
+
+应该调用 support_skill。
+
+用户包含：
+"数据分析"
+"趋势"
+"异常"
+"统计"
+"走势"
+"波动"
+
+应该调用 data_analysis_skill。
 """
 PRODUCT_ANALYSIS_PROMPT = """
 你是一个电商商品分析专家。

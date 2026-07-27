@@ -57,6 +57,21 @@ def rag_skill(user_input: str) -> dict:
     return {"skill": "rag_skill", "user_input": user_input}
 
 
+def seo_skill(user_input: str) -> dict:
+    """SEO优化分析、关键词研究、标题优化等"""
+    return {"skill": "seo_skill", "user_input": user_input}
+
+
+def support_skill(user_input: str) -> dict:
+    """客服支持、订单查询、退换货处理、售后问题等"""
+    return {"skill": "support_skill", "user_input": user_input}
+
+
+def data_analysis_skill(user_input: str) -> dict:
+    """数据分析、趋势分析、异常检测、统计报告等"""
+    return {"skill": "data_analysis_skill", "user_input": user_input}
+
+
 tools = [
     StructuredTool.from_function(product_skill),
     StructuredTool.from_function(ads_skill),
@@ -67,6 +82,9 @@ tools = [
     StructuredTool.from_function(competitor_skill),
     StructuredTool.from_function(report_skill),
     StructuredTool.from_function(rag_skill),
+    StructuredTool.from_function(seo_skill),
+    StructuredTool.from_function(support_skill),
+    StructuredTool.from_function(data_analysis_skill),
 ]
 
 
