@@ -1,48 +1,48 @@
 # Web Framework
-fastapi==0.139.2
-uvicorn==0.51.0
-pydantic==2.13.4
-python-multipart==0.0.20
+fastapi>=0.100
+uvicorn>=0.20
+pydantic>=2.0
+python-multipart>=0.0.5
 
 # LLM & LangChain
-langchain==1.3.14
-langchain-core==1.4.9
-langchain-openai==1.3.5
-langchain-community==0.4.2
-langchain-text-splitters==1.1.2
-langchain-huggingface==1.2.2
-langgraph==1.2.9
+langchain>=0.2
+langchain-core>=0.2
+langchain-openai>=0.1
+langchain-community>=0.2
+langchain-text-splitters>=0.2
+langchain-huggingface>=0.1
+langgraph>=0.2
 
 # Embeddings & Vector Store
-sentence-transformers==5.6.0
-faiss-cpu==1.14.3
+sentence-transformers>=2.0
+faiss-cpu>=1.7
 
 # LLM Provider
-dashscope==1.26.4
+dashscope>=1.0
 
 # Feishu Integration
-lark-oapi==1.7.1
-pycryptodome==3.23.0
+lark-oapi>=1.0
+pycryptodome>=3.15
 
 # Data Processing
-pandas==3.0.3
-openpyxl==3.1.5
-xlrd==2.0.2
-PyPDF2==3.0.1
-python-docx==1.2.0
+pandas>=2.0
+openpyxl>=3.1
+xlrd>=2.0
+PyPDF2>=3.0
+python-docx>=0.8
 
 # Database
-SQLAlchemy==2.0.51
+SQLAlchemy>=2.0
 
 # Networking
-httpx==0.28.1
-requests==2.34.2
+httpx>=0.24
+requests>=2.28
 
 # Scheduling
-APScheduler==3.11.3
+APScheduler>=3.10
 
 # Environment
-python-dotenv==1.2.2
+python-dotenv>=1.0
 
 # Dev Tools
 flake8==6.1.0
