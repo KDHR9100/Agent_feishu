@@ -1,4 +1,5 @@
 import logging
+import time
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -8,37 +9,40 @@ from app.prompts import ROUTER_PROMPT
 logger = logging.getLogger("router")
 
 
-def product_skill_router(user_input: str) -> dict:
-    """Route user input to product analysis skill."""
+# ============================================================
+# Tool 函数: 名字必须与 SKILL_REGISTRY 的 key 一致
+# ============================================================
+def product_skill(user_input: str) -> dict:
+    """分析商品销售数据、库存、SKU表现等"""
     return {"skill": "product_skill", "user_input": user_input}
 
 
-def ads_skill_router(user_input: str) -> dict:
-    """Route user input to ads analysis skill."""
+def ads_skill(user_input: str) -> dict:
+    """分析广告投放效果、ROI、花费等"""
     return {"skill": "ads_skill", "user_input": user_input}
 
 
-def content_skill_router(user_input: str) -> dict:
-    """Route user input to content generation skill."""
+def content_skill(user_input: str) -> dict:
+    """生成营销文案、商品描述、推广内容等"""
     return {"skill": "content_skill", "user_input": user_input}
 
 
-def help_skill_router(user_input: str) -> dict:
-    """Route user input to help/guide skill."""
+def help_skill(user_input: str) -> dict:
+    """提供使用帮助和功能导航"""
     return {"skill": "help_skill", "user_input": user_input}
 
 
-def file_analysis_skill_router(user_input: str) -> dict:
-    """Route user input to file analysis skill."""
+def file_analysis_skill(user_input: str) -> dict:
+    """解析上传的文件数据(xlsx/csv/pdf/docx)"""
     return {"skill": "file_analysis_skill", "user_input": user_input}
 
 
 tools = [
-    StructuredTool.from_function(product_skill_router),
-    StructuredTool.from_function(ads_skill_router),
-    StructuredTool.from_function(content_skill_router),
-    StructuredTool.from_function(help_skill_router),
-    StructuredTool.from_function(file_analysis_skill_router),
+    StructuredTool.from_function(product_skill),
+    StructuredTool.from_function(ads_skill),
+    StructuredTool.from_function(content_skill),
+    StructuredTool.from_function(help_skill),
+    StructuredTool.from_function(file_analysis_skill),
 ]
 
 
@@ -54,13 +58,19 @@ def router(state):
     file_content = state.get("file_content")
     history = state.get("history", [])
 
+    logger.info(
+        "[router] user_input=%s, conversation_id=%s, has_file=%s"
+        % (
+            user_input[:80] + ("..." if len(user_input) > 80 else ""),
+            state.get("conversation_id", "default"),
+            bool(file_path),
+        )
+    )
+
     # ============================================================
-    # 关键逻辑 1: 如果检测到文件内容, 直接路由到文件解析技能
+    # 文件场景短路
     # ============================================================
-    # 当用户上传且文件已解析出内容时
-    # 或者用户明确要求解析文件时
     if file_path and file_content:
-        # 如果用户消息是空或者只有"[文件] xxx", 包含解析关键词
         is_empty_or_file_msg = (
             not user_input.strip()
             or user_input.strip().startswith("[文件]")
@@ -76,20 +86,21 @@ def router(state):
                 "file_path": file_path,
                 "file_content": file_content,
             }
+            state["skills_to_execute"] = ["file_analysis_skill"]
             state["intent"] = "file_analysis_skill"
             logger.info(
-                "[Router] File detected, directly routing to file_analysis_skill"
+                "[router] file shortcut → file_analysis_skill, file_path=%s"
+                % file_path
             )
             return state
 
     # ============================================================
-    # 关键逻辑 2: 将历史上下文注入到路由 Prompt 中
+    # 历史上下文注入
     # ============================================================
-    # 构建历史上下文字符串(最近 5 条)
     history_text = ""
     if history:
         history_lines = []
-        for msg in history[-5:]:  # 最多取最近 5 条
+        for msg in history[-5:]:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
             if role == "user":
@@ -97,8 +108,8 @@ def router(state):
             elif role == "assistant":
                 history_lines.append(f"助手: {content}")
         history_text = "\n".join(history_lines)
+        logger.info("[router] history injected, %d messages" % len(history[-5:]))
 
-    # 在 System Prompt 中追加历史上下文
     enhanced_prompt = ROUTER_PROMPT
     if history_text:
         enhanced_prompt = (
@@ -106,31 +117,47 @@ def router(state):
             + f'\n\n## 历史对话上下文\n{history_text}\n\n请基于以上历史对话理解用户意图时如果用户说"刚刚发的文档"、"刚才那个文件"等，,应结合历史上下文判断。'
         )
 
+    # ===== ReAct 回边: 注入反思反馈 =====
+    reflect_feedback = state.get("reflect_feedback")
+    if reflect_feedback:
+        enhanced_prompt = (
+            enhanced_prompt
+            + f"\n\n## 上次执行反思反馈\n{reflect_feedback}\n\n请基于以上反馈重新选择更合适的技能组合。"
+        )
+        state["reflect_feedback"] = None
+        logger.info(
+            "[router] reflect_feedback injected (retry), feedback=%s"
+            % reflect_feedback[:100]
+        )
+
     messages = [
         SystemMessage(content=enhanced_prompt),
         HumanMessage(content=user_input),
     ]
 
+    logger.info("[router] calling LLM with tools...")
+    router_start = time.time()
     response = llm_with_tools.invoke(messages)
+    router_duration = time.time() - router_start
+    logger.info(
+        "[router] LLM responded in %.2fs, has_tool_calls=%s"
+        % (router_duration, bool(response.tool_calls))
+    )
 
     if response.tool_calls:
-        tool_call = response.tool_calls[0]
-        skill_name = tool_call["name"]
-        params = tool_call["args"]
+        selected_skills = [tc["name"] for tc in response.tool_calls]
+        first_params = response.tool_calls[0]["args"]
 
-        # 如果路由到 file_analysis_skill, 同时传递文件信息
-        if skill_name == "file_analysis_skill" and file_path and file_content:
-            params["file_path"] = file_path
-            params["file_content"] = file_content
+        if "file_analysis_skill" in selected_skills and file_path and file_content:
+            first_params["file_path"] = file_path
+            first_params["file_content"] = file_content
 
-        state["tool_result"] = {"skill": skill_name, **params}
-        state["intent"] = skill_name
+        state["tool_result"] = {"skill": selected_skills[0], **first_params}
+        state["skills_to_execute"] = selected_skills
+        state["intent"] = selected_skills[0]
         logger.info(
-            "[Router] Intent recognized: %s - User input: %s"
-            % (
-                skill_name,
-                user_input[:50] + "..." if len(user_input) > 50 else user_input,
-            )
+            "[router] selected %d skill(s): %s"
+            % (len(selected_skills), "+".join(selected_skills))
         )
     else:
         state["tool_result"] = {
@@ -138,16 +165,14 @@ def router(state):
             "user_input": user_input,
             "data": "Unable to recognize the task, please rephrase.",
         }
+        state["skills_to_execute"] = ["unknown"]
         state["intent"] = "unknown"
-        logger.info(
-            "[Router] Intent not recognized - User input: %s"
-            % (user_input[:50] + "..." if len(user_input) > 50 else user_input)
-        )
+        logger.warning("[router] no tool_calls, intent=unknown")
 
     if hasattr(response, "response_metadata") and response.response_metadata:
         token_usage = response.response_metadata.get("token_usage", {})
         logger.info(
-            "[Router] Token Usage - Prompt: %d, Completion: %d, Total: %d"
+            "[router] tokens: prompt=%d, completion=%d, total=%d"
             % (
                 token_usage.get("prompt_tokens", 0),
                 token_usage.get("completion_tokens", 0),

@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTTPException
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -49,7 +50,6 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = "default"
-    use_coordinator: Optional[bool] = False
 
 
 class RAGRequest(BaseModel):
@@ -80,55 +80,41 @@ async def jingang_consumption():
 async def chat(request: ChatRequest):
     try:
         logger.info(
-            "Received chat request: conversation_id=%s, use_coordinator=%s"
-            % (request.conversation_id, request.use_coordinator)
+            "Received chat request: conversation_id=%s" % request.conversation_id
         )
         start_time = time.time()
 
-        if request.use_coordinator:
-            from app.agents.coordinator import coordinator
+        # 重构后: 单一 workflow 入口, 原 use_coordinator 分支已删除
+        # 多 Agent 协作能力合并进 LangGraph (skill_executor + answer 综合)
+        from app.agent.workflow import agent
 
-            logger.debug("Using coordinator mode")
-            result = coordinator.route_and_coordinate(request.message)
-            duration = time.time() - start_time
-            monitoring_stats.record_skill_call("coordinator", duration)
-            logger.info("Coordinator response time: %.2fs" % duration)
-            return {
-                "status": "success",
-                "answer": result.get("summary", str(result)),
-                "details": result,
-            }
-        else:
-            from app.agent.workflow import agent
-
-            logger.debug("Using workflow mode")
-            result = agent.invoke(
-                {
-                    "user_input": request.message,
-                    "conversation_id": request.conversation_id,
-                }
-            )
-            duration = time.time() - start_time
-            monitoring_stats.record_skill_call("workflow", duration)
-            if "intent" in result:
-                monitoring_stats.record_intent(result["intent"])
-            if "token_usage" in result:
-                monitoring_stats.record_llm_call(
-                    duration, token_usage=result["token_usage"]
-                )
-            logger.info("Workflow response time: %.2fs" % duration)
-            return {
-                "status": "success",
-                "answer": result.get("answer", ""),
+        logger.debug("Using workflow mode")
+        result = agent.invoke(
+            {
+                "user_input": request.message,
                 "conversation_id": request.conversation_id,
-                "intent": result.get("intent"),
-                "token_usage": result.get("token_usage"),
             }
+        )
+        duration = time.time() - start_time
+        monitoring_stats.record_skill_call("workflow", duration)
+        if "intent" in result:
+            monitoring_stats.record_intent(result["intent"])
+        if "token_usage" in result:
+            monitoring_stats.record_llm_call(
+                duration, token_usage=result["token_usage"]
+            )
+        logger.info("Workflow response time: %.2fs" % duration)
+        return {
+            "status": "success",
+            "answer": result.get("answer", ""),
+            "conversation_id": request.conversation_id,
+            "intent": result.get("intent"),
+            "token_usage": result.get("token_usage"),
+        }
     except Exception as e:
         logger.error("Chat error: %s" % str(e), exc_info=True)
         monitoring_stats.record_skill_call("chat", 0, success=False)
         raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
-
 
 @app.post("/rag/query")
 async def rag_query(request: RAGRequest):

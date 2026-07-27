@@ -47,7 +47,7 @@ def check_input(user_input: str) -> dict:
                 "message": (
                     "我是电商运营助手,"
                     "关于" + keyword + "建议咨询相关专业渠道."
-                    "您可以问我电商运营电商运营的任何问题."
+                    "您可以问我电商运营的任何问题."
                 ),
             }
 
