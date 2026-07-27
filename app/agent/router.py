@@ -37,19 +37,48 @@ def file_analysis_skill(user_input: str) -> dict:
     return {"skill": "file_analysis_skill", "user_input": user_input}
 
 
+def inventory_skill(user_input: str) -> dict:
+    """分析库存数据、库存预警、补货建议等"""
+    return {"skill": "inventory_skill", "user_input": user_input}
+
+
+def competitor_skill(user_input: str) -> dict:
+    """分析竞品数据、市场竞争情报等"""
+    return {"skill": "competitor_skill", "user_input": user_input}
+
+
+def report_skill(user_input: str) -> dict:
+    """生成运营报告、数据报告、分析报告等"""
+    return {"skill": "report_skill", "user_input": user_input}
+
+
+def rag_skill(user_input: str) -> dict:
+    """基于知识库的检索增强问答(RAG)"""
+    return {"skill": "rag_skill", "user_input": user_input}
+
+
 tools = [
     StructuredTool.from_function(product_skill),
     StructuredTool.from_function(ads_skill),
     StructuredTool.from_function(content_skill),
     StructuredTool.from_function(help_skill),
     StructuredTool.from_function(file_analysis_skill),
+    StructuredTool.from_function(inventory_skill),
+    StructuredTool.from_function(competitor_skill),
+    StructuredTool.from_function(report_skill),
+    StructuredTool.from_function(rag_skill),
 ]
 
 
-llm = get_llm()
+_llm_with_tools = None
 
 
-llm_with_tools = llm.bind_tools(tools)
+def _get_llm_with_tools():
+    global _llm_with_tools
+    if _llm_with_tools is None:
+        _llm = get_llm()
+        _llm_with_tools = _llm.bind_tools(tools)
+    return _llm_with_tools
 
 
 def router(state):
@@ -137,6 +166,7 @@ def router(state):
 
     logger.info("[router] calling LLM with tools...")
     router_start = time.time()
+    llm_with_tools = _get_llm_with_tools()
     response = llm_with_tools.invoke(messages)
     router_duration = time.time() - router_start
     logger.info(

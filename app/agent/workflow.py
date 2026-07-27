@@ -119,12 +119,36 @@ def _run_file_analysis_skill(user_input, file_path, file_content, tool_result):
     return file_analysis_skill(user_input, fp, fc)
 
 
+def _run_inventory_skill(user_input, file_path, file_content, tool_result):
+    from app.skills.inventory_skill import inventory_skill
+    return inventory_skill(user_input)
+
+
+def _run_competitor_skill(user_input, file_path, file_content, tool_result):
+    from app.skills.competitor_skill import competitor_skill
+    return competitor_skill(user_input)
+
+
+def _run_report_skill(user_input, file_path, file_content, tool_result):
+    from app.skills.report_skill import report_skill
+    return report_skill(user_input, tool_result)
+
+
+def _run_rag_skill(user_input, file_path, file_content, tool_result):
+    from app.skills.rag_skill import rag_skill
+    return rag_skill(user_input)
+
+
 SKILL_REGISTRY = {
     "product_skill": _run_product_skill,
     "ads_skill": _run_ads_skill,
     "content_skill": _run_content_skill,
     "help_skill": _run_help_skill,
     "file_analysis_skill": _run_file_analysis_skill,
+    "inventory_skill": _run_inventory_skill,
+    "competitor_skill": _run_competitor_skill,
+    "report_skill": _run_report_skill,
+    "rag_skill": _run_rag_skill,
 }
 
 
@@ -309,7 +333,7 @@ def reflect(state):
     skills = state.get("skills_to_execute") or []
 
     # 文件场景短路
-    if len(skills) == 1 and skills[0] == "file_analysis_skill":
+    if len(skills) == 1 and skills[0] in {"file_analysis_skill", "rag_skill"}:
         logger.info("[reflect] file_analysis shortcut, skipping reflection")
         state["reflect_decision"] = "sufficient"
         return state

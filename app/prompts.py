@@ -34,6 +34,18 @@ ROUTER_PROMPT = """
 5. file_analysis_skill - 文件分析
 用于解析用户上传的数据文件（Excel/CSV/PDF/Word），生成分析报告。
 
+6. inventory_skill - 库存分析
+用于分析库存数据、库存预警、补货建议、库存周转率等。
+
+7. competitor_skill - 竞品分析
+用于分析竞品数据、市场竞争情报、价格对比等。
+
+8. report_skill - 报告生成
+用于生成运营报告、数据报告、分析报告等。
+
+9. rag_skill - 知识库问答
+基于RAG检索增强的知识库问答，用于回答业务知识相关问题。
+
 
 请根据用户输入的意图，选择最合适的Skill。
 
@@ -51,7 +63,7 @@ ROUTER_PROMPT = """
 注意：
 
 - skill字段必须是以下之一：
-product_skill, ads_skill, content_skill, help_skill, file_analysis_skill, unknown
+product_skill, ads_skill, content_skill, help_skill, file_analysis_skill, inventory_skill, competitor_skill, report_skill, rag_skill, unknown
 
 - parameters字段用于传递给Skill的参数，根据用户输入提取关键信息。
 
@@ -90,6 +102,38 @@ product_skill, ads_skill, content_skill, help_skill, file_analysis_skill, unknow
 "创作"
 
 应该调用 content_skill。
+
+用户包含：
+"库存"
+"补货"
+"周转率"
+"缺货"
+
+应该调用 inventory_skill。
+
+用户包含：
+"竞品"
+"竞争"
+"对手"
+"市场分析"
+
+应该调用 competitor_skill。
+
+用户包含：
+"报告"
+"报表"
+"汇总"
+"报告生成"
+
+应该调用 report_skill。
+
+用户包含：
+"知识库"
+"检索"
+"查询知识"
+"文档搜索"
+
+应该调用 rag_skill。
 """
 PRODUCT_ANALYSIS_PROMPT = """
 你是一个电商商品分析专家。

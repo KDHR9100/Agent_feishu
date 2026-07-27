@@ -23,7 +23,7 @@ PLATFORMS = {
     "xiaohongshu": {
         "name": "Xiaohongshu",
         "max_length": 1500,
-        "style": "绉嶈崏 style, friendly, natural, use hashtags, emojis",
+        "style": "种草 style, friendly, natural, use hashtags, emojis",
         "features": ["notes copy", "review copy", "tutorial copy"],
     },
     "wechat": {
@@ -93,7 +93,7 @@ def detect_platform(user_input: str) -> str:
     platform_keywords = {
         "douyin": ["douyin", "short video", "live"],
         "taobao": ["taobao", "detail page"],
-        "xiaohongshu": ["xiaohongshu", "绉嶈崏", "notes"],
+        "xiaohongshu": ["xiaohongshu", "种草", "notes", "红书"],
         "wechat": ["wechat", "official account", "moments"],
         "pinduoduo": ["pinduoduo", "group buy"],
     }
@@ -129,13 +129,13 @@ def extract_product_info(user_input: str) -> dict:
         info["price"] = price_match.group(1)
 
     name_match = re.search(
-        r"product\s*[:]?\s*([^锛屻€傦紒?]+)", user_input, re.IGNORECASE
+        r"product\s*[:]?\s*([^\n,;]+)", user_input, re.IGNORECASE
     )
     if name_match:
         info["product_name"] = name_match.group(1)
 
     feature_match = re.search(
-        r"features\s*[:]?\s*([^锛屻€傦紒?]+)", user_input, re.IGNORECASE
+        r"features\s*[:]?\s*([^\n,;]+)", user_input, re.IGNORECASE
     )
     if feature_match:
         info["features"] = feature_match.group(1)
