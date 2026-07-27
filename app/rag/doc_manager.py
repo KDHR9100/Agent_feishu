@@ -289,6 +289,7 @@ class DocVectorManager:
     def _full_rebuild(self):
         """Full rebuild: recreate FAISS index from all documents."""
         from langchain_core.documents import Document
+        # NOTE: FAISS has no standalone package yet
         from langchain_community.vectorstores import FAISS
         from app.rag.vectorstore import text_splitter
 
@@ -356,7 +357,8 @@ class DocVectorManager:
 
         if self.vector_store.vector_store is None:
             # No existing index, need to create one
-            from langchain_community.vectorstores import FAISS
+            # NOTE: FAISS has no standalone package yet
+        from langchain_community.vectorstores import FAISS
             self.vector_store.vector_store = FAISS.from_documents(
                 chunks, self.vector_store.embeddings
             )

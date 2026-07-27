@@ -1,3 +1,5 @@
+# NOTE: FAISS vectorstore has no standalone package yet
+# langchain-community sunset: github.com/langchain-ai/langchain-community/issues/674
 from langchain_community.vectorstores import FAISS
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -89,6 +91,7 @@ class VectorStore:
         # 2. DashScope embedding
         try:
             logger.info("Trying DashScope embedding")
+            # NOTE: DashScopeEmbeddings has no standalone package yet
             from langchain_community.embeddings import DashScopeEmbeddings
             self.embeddings = DashScopeEmbeddings(
                 model=config.EMBEDDING_MODEL_NAME,

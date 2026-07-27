@@ -157,7 +157,7 @@ def get_embeddings():
                 encode_kwargs={"normalize_embeddings": True},
             )
         except ImportError:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
+            from langchain_huggingface import HuggingFaceEmbeddings
 
             embeddings = HuggingFaceEmbeddings(
                 model_name=config.LOCAL_EMBEDDING_MODEL,
