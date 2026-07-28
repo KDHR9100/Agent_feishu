@@ -1,4 +1,4 @@
-.env
+﻿.env
 *.log
 __pycache__/
 *.py[cod]
@@ -61,3 +61,23 @@ data/vectorstore/faiss_index/*
 !data/vectorstore/faiss_index/.gitkeep
 data/vectorstore/doc_hashes.json
 data/vectorstore/query_cache.json
+
+# Private resume files
+resume.md
+resume_feishu_project.txt
+
+# Private interview/docs materials (not part of project)
+docs/comparison_checklist.md
+docs/interview_*.md
+docs/interview_*.html
+docs/job_strategy.md
+docs/sql_safety_guide.md
+
+# Utility / conversion / fix scripts (not part of project)
+_check_pdf_tools.py
+_rename_and_convert.py
+_update*.py
+md_to_pdf.py
+
+# Chinese resume files
+*简历*
