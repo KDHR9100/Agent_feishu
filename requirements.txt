@@ -1,11 +1,10 @@
-# Web Framework
+﻿# Web Framework
 fastapi>=0.100
 uvicorn>=0.20
 pydantic>=2.0
 python-multipart>=0.0.5
 
 # LLM & LangChain
-langchain>=0.2
 langchain-core>=0.2
 langchain-openai>=0.1
 langchain-community>=0.2
@@ -35,7 +34,6 @@ python-docx>=0.8
 SQLAlchemy>=2.0
 
 # Networking
-httpx>=0.24
 requests>=2.28
 
 # Scheduling
@@ -43,6 +41,9 @@ APScheduler>=3.10
 
 # Environment
 python-dotenv>=1.0
+
+# Testing
+pytest>=8.0
 
 # Dev Tools
 flake8==6.1.0
