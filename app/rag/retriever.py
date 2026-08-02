@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+RAG 检索器：结合混合搜索和 LLM 生成回答。
+"""
+
+import time
+
 from app.config import get_llm, logger
 from app.rag.doc_manager import doc_vector_manager
 
@@ -11,8 +18,16 @@ class RAGRetriever:
         try:
             logger.info("RAG query: %s" % query[:50])
 
-            # Smart query: cache -> vector store -> cache
+            retrieval_start = time.time()
+
+            # 使用混合搜索（BM25 + 向量 + Rerank）
             results, from_cache = self.manager.query(query, k=3)
+
+            retrieval_time = time.time() - retrieval_start
+            logger.info(
+                "[RAG] 检索指标: 耗时=%.3fs, 候选数=%d, 缓存命中=%s",
+                retrieval_time, len(results), from_cache
+            )
 
             if not results:
                 logger.warning("No results from vector store, direct LLM response")
@@ -22,7 +37,7 @@ class RAGRetriever:
             context = "\n\n".join(results)
 
             prompt = """Based on the following context, answer the question.
-If the context does not contain relevant info, say you don't know.
+If the context does not contain relevant info, say you don\'t know.
 
 Context: %s
 

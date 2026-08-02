@@ -223,6 +223,20 @@ class DocVectorManager:
         self.query_cache = QueryCache()
         self.last_sync_time = 0
         self._vector_store = None
+        self._hybrid_searcher = None
+
+    @property
+    def hybrid_searcher(self):
+        """延迟加载混合搜索器。"""
+        if self._hybrid_searcher is None:
+            try:
+                from app.rag.hybrid_search import HybridSearcher
+                self._hybrid_searcher = HybridSearcher(self.vector_store)
+                logger.info("[DocManager] 混合搜索器初始化成功")
+            except Exception as e:
+                logger.warning("[DocManager] 混合搜索器初始化失败，将使用纯向量搜索: %s", e)
+                self._hybrid_searcher = None
+        return self._hybrid_searcher
 
     @property
     def vector_store(self):
@@ -271,6 +285,8 @@ class DocVectorManager:
 
         if not has_changes and not force_rebuild:
             logger.info("[DocSync] No changes detected")
+            # BM25 索引在内存中，重启后需要重建
+            self._rebuild_bm25_index_from_store()
             self.last_sync_time = time.time()
             return {
                 "status": "no_changes",
@@ -326,6 +342,9 @@ class DocVectorManager:
         self.query_cache.clear()
         self.last_sync_time = time.time()
 
+        # 重建 BM25 索引
+        self._rebuild_bm25_index(chunks)
+
         logger.info(
             "[DocSync] Full rebuild: %d docs -> %d chunks",
             len(all_texts), len(chunks)
@@ -370,6 +389,9 @@ class DocVectorManager:
         self.query_cache.clear()
         self.last_sync_time = time.time()
 
+        # 重建 BM25 索引（增量更新后需要全量重建 BM25）
+        self._rebuild_bm25_index_from_store()
+
         logger.info(
             "[DocSync] Incremental: added %d docs -> %d chunks",
             len(added_files), len(chunks)
@@ -409,12 +431,24 @@ class DocVectorManager:
             logger.info("[DocQuery] Cache hit for: %s", question[:50])
             return cached, True  # (results, from_cache)
 
-        # Query vector store
+        # 使用混合搜索（BM25 + 向量 + Rerank），失败时回退到纯向量搜索
         if self.vector_store.vector_store is None:
             self.vector_store.initialize()
 
-        docs = self.vector_store.similarity_search(question, k=k)
-        results = [doc.page_content for doc in docs]
+        results = []
+        try:
+            if self.hybrid_searcher is not None:
+                hybrid_results = self.hybrid_searcher.search(question, k=k, use_rerank=True)
+                results = [item["content"] for item in hybrid_results]
+                logger.info("[DocQuery] 混合搜索返回 %d 条结果", len(results))
+        except Exception as e:
+            logger.warning("[DocQuery] 混合搜索失败，回退到纯向量搜索: %s", e)
+            results = []
+
+        # 回退：纯向量搜索
+        if not results:
+            docs = self.vector_store.similarity_search(question, k=k)
+            results = [doc.page_content for doc in docs]
 
         # Cache result
         self.query_cache.set(question, doc_signature, results)
@@ -424,6 +458,39 @@ class DocVectorManager:
             question[:50], len(results)
         )
         return results, False  # (results, from_cache)
+
+
+    def _rebuild_bm25_index(self, chunks):
+        """从分块列表重建 BM25 索引。"""
+        try:
+            if self.hybrid_searcher is not None:
+                chunk_texts = [chunk.page_content for chunk in chunks]
+                self.hybrid_searcher.build_bm25_index(chunk_texts)
+                logger.info("[DocManager] BM25 索引已重建，共 %d 个分块", len(chunk_texts))
+        except Exception as e:
+            logger.warning("[DocManager] BM25 索引重建失败: %s", e)
+
+    def _rebuild_bm25_index_from_store(self):
+        """从向量存储中提取所有文档文本并重建 BM25 索引。"""
+        try:
+            if self.hybrid_searcher is None:
+                return
+            if self.vector_store.vector_store is None:
+                return
+            # 从 FAISS 索引的 docstore 中提取文档
+            docstore = self.vector_store.vector_store.docstore
+            index_to_docstore_id = self.vector_store.vector_store.index_to_docstore_id
+            all_texts = []
+            for idx in sorted(index_to_docstore_id.keys()):
+                doc_id = index_to_docstore_id[idx]
+                doc = docstore.search(doc_id)
+                if hasattr(doc, "page_content"):
+                    all_texts.append(doc.page_content)
+            if all_texts:
+                self.hybrid_searcher.build_bm25_index(all_texts)
+                logger.info("[DocManager] BM25 索引从向量存储重建完成，共 %d 个分块", len(all_texts))
+        except Exception as e:
+            logger.warning("[DocManager] 从向量存储重建 BM25 索引失败: %s", e)
 
 
 # Singleton

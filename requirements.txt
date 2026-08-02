@@ -49,3 +49,7 @@ pytest>=8.0
 flake8==6.1.0
 mypy==1.11.0
 bandit==1.9.4
+
+# Hybrid Search & Rerank
+rank-bm25>=0.2.2
+jieba>=0.42.1

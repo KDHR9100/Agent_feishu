@@ -1,0 +1,12 @@
+.git
+.trae
+.vscode
+__pycache__
+*.pyc
+app.log
+*.db
+docs/
+tests/
+*.md
+*.pdf
+*.html

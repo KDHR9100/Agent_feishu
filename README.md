@@ -27,8 +27,8 @@ User (Feishu WebSocket) -> Guardrails -> Agent Router -> Skills -> Tools -> LLM
 
 | 类别 | 技术 | 说明 |
 |------|------|------|
-| Agent 编排 | LangGraph 1.2 | 状态机工作流管理 |
-| LLM 框架 | LangChain 1.3 | 工具调用、消息处理 |
+| Agent 编排 | LangGraph 0.2+ | 状态机工作流管理 |
+| LLM 框架 | LangChain 0.2+ | 工具调用、消息处理 |
 | LLM 模型 | deepseek-v4-pro | 通过 DashScope API 调用 |
 | Web 框架 | FastAPI + Uvicorn | HTTP 接口、服务化部署 |
 | 向量检索 | FAISS + MMR | 最大边际相关性检索 |
@@ -87,7 +87,6 @@ Agent_feishu/
 │   │   ├── router.py         # 意图路由（get_llm 单例 + Guardrails）
 │   │   ├── workflow.py       # LangGraph 状态机工作流
 │   │   └── state.py          # 状态定义
-│   ├── agents/               # 专业化 Agent（备用）
 │   ├── api/                  # API 接口
 │   │   └── feishu.py         # 飞书 Webhook + 签名验证 + AES 解密
 │   ├── skills/               # 业务技能
@@ -196,7 +195,24 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### 6.6 RAG 评估（可选）
+### 6.6 Docker 部署
+
+```bash
+# 构建并启动（需要先创建 .env 文件）
+docker compose up -d --build
+
+# 查看日志
+docker compose logs -f
+
+# 停止服务
+docker compose down
+```
+
+
+
+> 注意：Docker 部署需要预先配置好 .env 文件。模型缓存通过 named volume 持久化。
+
+### 6.7 RAG 评估（可选）
 
 ```bash
 python -m app.rag.eval.evaluate_rag
@@ -290,7 +306,8 @@ Average latency: 11ms
 | USE_LOCAL_EMBEDDING | true | 是否使用本地嵌入模型 |
 | FEISHU_APP_ID | - | 飞书应用 ID |
 | FEISHU_APP_SECRET | - | 飞书应用密钥 |
-| FEISHU_WEBHOOK_SECRET | - | Webhook 签名密钥 |
+| FEISHU_BOT_NAME | Ecommerce Agent | 飞书机器人名称 |
+| FEISHU_WEBHOOK_SECRET | - | Webhook 验证 Token |
 | FEISHU_ENCRYPT_KEY | - | AES 加密密钥 |
 | DATABASE_URL | sqlite:///./feishu_agent.db | 数据库连接 URL |
 | APP_PORT | 8000 | 服务端口 |

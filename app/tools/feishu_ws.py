@@ -1,4 +1,3 @@
-import lark_oapi as lark
 import logging
 import json
 import time
@@ -7,14 +6,9 @@ import queue
 import threading
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
-# 导入项目内部模块
-from app.tools.feishu_tool import feishu_tool
-from app.tools.file_parser_tool import file_parser_tool
-from app.tools.guardrails import check_input
-from app.agent.workflow import agent
-
-# 日志配置
+# 日志配置（必须在导入项目模块之前）
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s",
@@ -23,8 +17,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("feishu_ws_official")
 
+# 确保 Lark SDK 日志也输出到 app.log
+_lark_logger = logging.getLogger("Lark")
+_lark_logger.setLevel(logging.INFO)
+_lark_logger.propagate = True
+
+import lark_oapi as lark
+
+# 导入项目内部模块
+from app.tools.feishu_tool import feishu_tool
+from app.tools.file_parser_tool import file_parser_tool
+from app.tools.guardrails import check_input
+from app.agent.workflow import agent
+
 # 消息队列
 message_queue = queue.Queue()
+
+# 消息处理线程池（并发消费队列）
+MAX_WORKERS = int(os.getenv("WS_MAX_WORKERS", "3"))
 
 
 def do_p2_im_message_receive_v1(data):
@@ -171,98 +181,111 @@ def do_p2_im_message_receive_v1(data):
         logger.error("[Feishu WS] [%s] Failed to process event: %s", track_id, str(e), exc_info=True)
 
 
-def process_messages():
-    """消息处理线程（消费队列）"""
-    logger.info("[Feishu WS] Processor started")
-    while True:
-        try:
-            msg = message_queue.get(timeout=1)
-            if msg is None:
-                break
+def _handle_single_message(msg):
+    """处理单条消息（在工作线程中执行）"""
+    track_id = msg.get("track_id", "unknown")
+    try:
+        logger.info("[Feishu WS] [%s] Processing message (thread=%s)", track_id, threading.current_thread().name)
 
-            track_id = msg.get("track_id", "unknown")
-            logger.info("[Feishu WS] [%s] Processing message", track_id)
+        # ---------- 文件下载与解析 ----------
+        file_path = None
+        file_content = None
+        file_info = msg.get("file_info")
 
-            # ---------- 文件下载与解析 ----------
-            file_path = None
-            file_content = None
-            file_info = msg.get("file_info")
-
-            if file_info:
-                try:
-                    file_key = file_info.get("file_key", "")
-                    raw_file_name = file_info.get("file_name", "unknown")
-                    file_name = os.path.basename(raw_file_name)
-                    allowed_extensions = {".xlsx", ".xls", ".csv", ".pdf", ".docx"}
-                    _, file_ext = os.path.splitext(file_name)
-                    if file_ext.lower() not in allowed_extensions:
-                        logger.warning("[Feishu WS] [%s] Rejected file type: %s", track_id, file_ext)
-                        feishu_tool.reply_message(msg["message_id"], f"不支持的文件类型：{file_ext}，请上传 Excel/CSV/PDF/Word 文件。")
-                        continue
-                    save_path = f"data/uploads/{file_name}"
-
-                    try:
-                        feishu_tool.reply_message(msg["message_id"], "\U0001f504 正在解析文件，请稍候...")
-                    except Exception:
-                        pass
-
-                    logger.info("[Feishu WS] [%s] Downloading file: %s", track_id, file_key)
-                    download_result = feishu_tool.download_file(
-                        file_key, save_path, message_id=msg["message_id"]
-                    )
-
-                    if download_result.get("success"):
-                        file_path = save_path
-                        logger.info("[Feishu WS] [%s] File downloaded: %s", track_id, file_path)
-                        parse_result = file_parser_tool.parse_local_file(file_path)
-                        if parse_result.get("error"):
-                            logger.error("[Feishu WS] [%s] Parse error: %s", track_id, parse_result.get("error"))
-                        else:
-                            file_content = file_parser_tool.format_file_summary(parse_result, file_name)
-                            logger.info(
-                                "[Feishu WS] [%s] File parsed: %d rows",
-                                track_id, parse_result.get("row_count", 0))
-                    else:
-                        logger.warning("[Feishu WS] [%s] Download failed: %s", track_id, download_result.get("error"))
-                except Exception as e:
-                    logger.error("[Feishu WS] [%s] File error: %s", track_id, str(e))
-
-            # ---------- 调用 Agent ----------
-            # Guardrails: input safety check
-            guardrails_result = check_input(msg["content"])
-            if guardrails_result["action"] in ("block", "redirect"):
-                answer = guardrails_result["message"]
-                logger.info("[Feishu WS] [%s] Guardrails: %s", track_id, guardrails_result["action"])
-            else:
-                try:
-                    agent_input = {
-                        "user_input": msg["content"],
-                        "conversation_id": msg["chat_id"]
-                        }
-                    if file_path:
-                        agent_input["file_path"] = file_path
-                    if file_content:
-                        agent_input["file_content"] = file_content
-
-                    result = agent.invoke(agent_input)
-                    answer = result.get("answer", "抱歉，我无法处理您的请求。")
-                    logger.info("[Feishu WS] [%s] Agent done, answer length=%d", track_id, len(answer))
-
-                except Exception as e:
-                    logger.error("[Feishu WS] [%s] Agent error: %s", track_id, str(e))
-                    answer = "处理您的问题时出现内部错误，请稍后重试。"
-
-            # ---------- 回复消息 ----------
+        if file_info:
             try:
-                feishu_tool.reply_message(msg["message_id"], answer)
-                logger.info("[Feishu WS] [%s] Reply sent", track_id)
-            except Exception as e:
-                logger.error("[Feishu WS] [%s] Reply failed: %s", track_id, str(e))
+                file_key = file_info.get("file_key", "")
+                raw_file_name = file_info.get("file_name", "unknown")
+                file_name = os.path.basename(raw_file_name)
+                allowed_extensions = {".xlsx", ".xls", ".csv", ".pdf", ".docx"}
+                _, file_ext = os.path.splitext(file_name)
+                if file_ext.lower() not in allowed_extensions:
+                    logger.warning("[Feishu WS] [%s] Rejected file type: %s", track_id, file_ext)
+                    feishu_tool.reply_message(msg["message_id"], f"不支持的文件类型：{file_ext}，请上传 Excel/CSV/PDF/Word 文件。")
+                    return
+                save_path = f"data/uploads/{file_name}"
 
-        except queue.Empty:
-            continue
+                try:
+                    feishu_tool.reply_message(msg["message_id"], "\U0001f504 正在解析文件，请稍候...")
+                except Exception:
+                    pass
+
+                logger.info("[Feishu WS] [%s] Downloading file: %s", track_id, file_key)
+                download_result = feishu_tool.download_file(
+                    file_key, save_path, message_id=msg["message_id"]
+                )
+
+                if download_result.get("success"):
+                    file_path = save_path
+                    logger.info("[Feishu WS] [%s] File downloaded: %s", track_id, file_path)
+                    parse_result = file_parser_tool.parse_local_file(file_path)
+                    if parse_result.get("error"):
+                        logger.error("[Feishu WS] [%s] Parse error: %s", track_id, parse_result.get("error"))
+                    else:
+                        file_content = file_parser_tool.format_file_summary(parse_result, file_name)
+                        logger.info(
+                            "[Feishu WS] [%s] File parsed: %d rows",
+                            track_id, parse_result.get("row_count", 0))
+                else:
+                    logger.warning("[Feishu WS] [%s] Download failed: %s", track_id, download_result.get("error"))
+            except Exception as e:
+                logger.error("[Feishu WS] [%s] File error: %s", track_id, str(e))
+
+        # ---------- 调用 Agent ----------
+        # Guardrails: input safety check
+        guardrails_result = check_input(msg["content"])
+        if guardrails_result["action"] in ("block", "redirect"):
+            answer = guardrails_result["message"]
+            logger.info("[Feishu WS] [%s] Guardrails: %s", track_id, guardrails_result["action"])
+        else:
+            try:
+                agent_input = {
+                    "user_input": msg["content"],
+                    "conversation_id": msg["chat_id"]
+                    }
+                if file_path:
+                    agent_input["file_path"] = file_path
+                if file_content:
+                    agent_input["file_content"] = file_content
+
+                result = agent.invoke(agent_input)
+                answer = result.get("answer", "抱歉，我无法处理您的请求。")
+                logger.info("[Feishu WS] [%s] Agent done, answer length=%d", track_id, len(answer))
+
+            except Exception as e:
+                logger.error("[Feishu WS] [%s] Agent error: %s", track_id, str(e))
+                answer = "处理您的问题时出现内部错误，请稍后重试。"
+
+        # ---------- 回复消息 ----------
+        try:
+            feishu_tool.reply_message(msg["message_id"], answer)
+            logger.info("[Feishu WS] [%s] Reply sent", track_id)
         except Exception as e:
-            logger.error("[Feishu WS] Processor error: %s", str(e))
+            logger.error("[Feishu WS] [%s] Reply failed: %s", track_id, str(e))
+
+    except Exception as e:
+        logger.error("[Feishu WS] [%s] Worker error: %s", track_id, str(e), exc_info=True)
+
+
+def process_messages():
+    """消息分发线程：从队列取消息，提交到线程池并发处理"""
+    logger.info("[Feishu WS] Processor started (workers=%d)", MAX_WORKERS)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="msg-worker") as pool:
+        while True:
+            try:
+                msg = message_queue.get(timeout=1)
+                if msg is None:
+                    logger.info("[Feishu WS] Received shutdown signal, waiting for workers to finish...")
+                    pool.shutdown(wait=True)
+                    break
+                # 提交到线程池并发处理
+                pool.submit(_handle_single_message, msg)
+                logger.debug("[Feishu WS] Submitted message %s to pool (queue_size=%d)",
+                             msg.get("track_id", "?"), message_queue.qsize())
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error("[Feishu WS] Dispatcher error: %s", str(e))
 
 
 def start_feishu_ws(app_id: str, app_secret: str):
@@ -271,12 +294,17 @@ def start_feishu_ws(app_id: str, app_secret: str):
         logger.error("[Feishu WS] No credentials provided")
         return
 
-    # 启动消息处理线程
+    # 启动消息处理线程（分发器）
     threading.Thread(target=process_messages, daemon=True).start()
-    logger.info("[Feishu WS] Processor thread started")
+    logger.info("[Feishu WS] Processor thread started (pool workers=%d)", MAX_WORKERS)
 
-    # 创建事件处理器
-    event_handler = lark.EventDispatcherHandler.builder("", "") \
+    # Read encrypt key and verification token from env
+    encrypt_key = os.getenv("FEISHU_ENCRYPT_KEY", "")
+    verification_token = os.getenv("FEISHU_WEBHOOK_SECRET", "")
+    logger.info("[Feishu WS] encrypt_key set: %s, verification_token set: %s", bool(encrypt_key), bool(verification_token))
+
+    # Create event handler with encrypt key and verification token
+    event_handler = lark.EventDispatcherHandler.builder(encrypt_key, verification_token) \
         .register_p2_im_message_receive_v1(do_p2_im_message_receive_v1) \
         .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(lambda x: None) \
         .build()

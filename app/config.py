@@ -8,6 +8,7 @@ load_dotenv()
 dictConfig(
     {
         "version": 1,
+        "disable_existing_loggers": False,
         "formatters": {
             "default": {
                 "format": "[%(asctime)s] %(levelname)s %(name)s %(module)s:%(lineno)d - %(message)s",
