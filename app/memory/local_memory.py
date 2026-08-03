@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from collections import OrderedDict
 from typing import List, Dict, Optional
 from datetime import datetime

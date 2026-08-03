@@ -1,6 +1,28 @@
-﻿# 更新日志 (CHANGELOG)
+# 更新日志 (CHANGELOG)
 
 本项目所有重要变更均记录于此文档。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
+
+---
+
+## [2.0.0] - 2026-08-03（第一次大更新）
+
+### 新增
+- **记忆扩容**：会话窗口 10 -> 60 条，工作流加载最近 30 条；消息超过 50 条自动 LLM 摘要（history_summary），25 轮对话可召回首条业务需求。
+- **多模态视觉**：飞书图片消息经 VLM 解析为结构化表格，参与 file_analysis_skill 分析。
+- **全链路 Token 追踪**：LangChain 回调式记账（token_tracker），router/planner/12 技能/reflect/answer 分技能归属；`/metrics/usage` 输出近 24h 分技能 Token 排行；支持 @timeout 线程池上下文传播。
+- **MCP 动态热插拔**：skills_manifest.json 为技能唯一数据源，registry 按 mtime 检测热重载 + version 计数，router 工具/关键词/bind_tools 缓存随版本刷新，新增技能免重启生效。
+- **Plan-Execute 规划**：planner 节点为复合指令生成顺序 Step JSON 计划（禁止并行 fan-out），skill_executor 按计划顺序执行并传递上游结果。
+- **流式思考链**：收到消息即时回执，路由/规划/执行各阶段推送"思考过程"进度消息。
+- **RAG 时间衰减**：文档入库携带 source/last_updated metadata，检索融合后按 exp(-λ·days) 衰减（λ=0.01 可调），新旧矛盾文档取新。
+- **飞书审批交互**：高危指令（降价/打折等关键词）触发审批卡片（card.action.trigger WS 回调），批准后后台执行并推送结果；action_log SQLite 动作审计；APPROVAL_ENABLED 开关。
+- **API 鉴权**：写接口支持 X-API-Key（API_KEY 环境变量）。
+- **集成测试**：tests/integration 6 个流程文件 38 用例（热插拔/记忆/Plan-Execute/RAG 衰减/回归/Token 追踪）。
+
+### 变更
+- workflow 节点 7 -> 8（新增 planner）；AgentState 14 -> 16 字段（history_summary、execution_plan）。
+- /chat 改为 asyncio.to_thread 执行，不再阻塞事件循环。
+- RAG 增量 sync 失败（嵌入维度不匹配等）自动降级全量重建。
+- ads_skill LLM 分析失败时降级返回 DB 聚合原始指标。
 
 ---
 

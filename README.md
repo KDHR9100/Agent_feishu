@@ -1,6 +1,6 @@
-﻿# Ecommerce Agent
+# Ecommerce Agent
 
-基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库、文件解析、多轮对话记忆、Guardrails 安全防护等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
+基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库（时间衰减）、文件解析、多轮对话记忆（60 条窗口 + 自动摘要）、Guardrails 安全防护、MCP 动态技能热插拔、Plan-Execute 顺序规划、高危操作飞书审批、多模态图片解析、全链路 Token 追踪等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
 
 ---
 
@@ -48,10 +48,11 @@ guardrails.check_input() --- 安全拦截
     v
 LangGraph agent.invoke() --- 状态机工作流
     |
-    +- load_history    加载最近 5 条对话历史
+    +- load_history    加载最近 30 条对话历史 + 长对话摘要
     +- load_file       解析上传文件（若有）
-    +- router          意图识别 + 技能路由（三层递进）
-    +- skill_executor  执行 1~N 个技能（注册表模式，多技能 fan-out）
+    +- router          意图识别 + 技能路由（三层递进，工具清单随 manifest 热更新）
+    +- planner         复合指令生成顺序执行计划（Plan-Execute）
+    +- skill_executor  按计划顺序执行 1~N 个技能（高危操作走审批门）
     +- reflect         ReAct 反思：LLM 判断结果是否充分
     |     +- insufficient -> 回到 router 重新路由（最多 2 次）
     +- answer          单结果直接提取 / 多结果 LLM 综合
@@ -78,19 +79,24 @@ feishu_tool.reply_message() --- 回复用户
 | 安全防护 | Guardrails + pycryptodome | 输入检测、飞书消息 AES 解密 |
 | 定时任务 | APScheduler | 库存预警、日报生成 |
 | 中文分词 | jieba | BM25 检索分词 |
+| 技能注册 | MCP manifest | skills_manifest.json 动态热插拔（mtime 检测，免重启） |
+| 可观测性 | Token 回调记账 | router/planner/技能/reflect/answer 分技能统计 |
+| 审批流 | 飞书交互卡片 | card.action.trigger 回调 + 后台执行 + SQLite 动作日志 |
+| 多模态 | VLM | 图片解析为结构化表格（file_analysis_skill） |
 
 ---
 
 ## 2. LangGraph 工作流
 
-### 节点定义（7 个节点）
+### 节点定义（8 个节点）
 
 | 节点 | 职责 |
 |------|------|
-| load_history | 从 LocalMemory 加载最近 5 条对话历史 |
+| load_history | 从 LocalMemory 加载最近 30 条对话历史 + 长对话摘要（history_summary） |
 | load_file | 若有文件路径，调用 file_parser_tool 解析文件 |
 | router | 意图识别 + 技能路由，输出 skills_to_execute 列表（支持多技能） |
-| skill_executor | 注册表模式迭代执行所有技能 |
+| planner | 多技能时生成顺序执行计划 execution_plan（Step JSON，禁止并行 fan-out）；单技能跳过 |
+| skill_executor | 按 execution_plan 顺序执行技能；高危指令（降价/打折等）走审批门非阻塞挂起 |
 | reflect | ReAct 反思：LLM 判断技能结果是否充分 |
 | answer | 单结果直接提取；多结果调用 LLM 综合生成连贯回答 |
 | save_history | 将用户输入和最终回答写入 LocalMemory |
@@ -103,9 +109,9 @@ feishu_tool.reply_message() --- 回复用户
 - 防死循环：retry_count >= MAX_RETRIES (2) 时强制 sufficient
 - 容错：reflect LLM 超时 20 秒，异常时 fail-open 为 sufficient
 
-### AgentState 定义（14 个字段）
+### AgentState 定义（16 个字段）
 
-user_input, conversation_id, history, tool_result, answer, intent, token_usage, file_path, file_content, skills_to_execute, skill_results, retry_count, reflect_feedback, reflect_decision
+user_input, conversation_id, history, tool_result, answer, intent, token_usage, file_path, file_content, skills_to_execute, skill_results, retry_count, reflect_feedback, reflect_decision, history_summary, execution_plan
 
 ---
 
@@ -126,6 +132,10 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 - 交叉验证：LLM 选择后，用关键词评分验证。若关键词最高分技能与 LLM 不同且置信度 >= 2，则关键词结果优先。
 - Keyword Fallback：LLM 调用超时或异常时，使用 KEYWORD_RULES 进行关键词匹配。
 - 最终 Fallback：关键词也无匹配 -> intent = "unknown" -> LLM 闲聊兜底。
+
+### 动态热插拔（MCP manifest）
+
+技能清单以 skills_manifest.json 为唯一数据源（name/description/keywords/module/function）。registry 每次路由前检测 manifest 文件 mtime，变化则重载并递增 version；router 按 version 刷新工具列表、关键词规则与 bind_tools 缓存。新增/修改技能无需重启服务即可生效。
 ---
 
 ## 4. 技能列表（12 个）
@@ -242,6 +252,15 @@ LLM-as-Judge 评估（app/eval/llm_judge.py）：
 - Routing 评估：8 个问题覆盖 8 个技能路由，测路由准确率 + 延迟
 - Judge 评估：LLM 打分 1-5 分，三个维度（relevance / accuracy / completeness）
 
+### 5.10 时间衰减排序
+
+文档入库时携带 metadata（source=文件名、last_updated=文件修改时间 ISO）。混合检索融合后对每个结果应用指数时间衰减：
+
+- final_score = rrf_score * exp(-TIME_DECAY_LAMBDA * days_ago)，TIME_DECAY_LAMBDA=0.01（环境变量可调）
+- 30 天前的文档权重约 74%，90 天前约 41%
+- 新旧文档内容矛盾时，新文档自动胜出
+- 缺少时间戳的结果不衰减
+
 ---
 
 ## 6. Guardrails 安全防护
@@ -267,9 +286,10 @@ LocalMemory 双层存储架构：
 
 | 参数 | 值 |
 |------|------|
-| max_history | 10 条/会话 |
+| max_history | 60 条/会话 |
 | max_conversations | 1000 |
-| 工作流实际使用 | 最近 5 条 |
+| 工作流实际使用 | 最近 30 条 + 历史摘要 |
+| 自动摘要 | 消息超过 50 条时，旧消息 LLM 压缩为摘要（history_summary） |
 | DB 内容截断 | 4000 字符 |
 
 每条消息格式：{"role": "user"/"assistant", "content": str, "timestamp": ISO时间}
@@ -284,6 +304,9 @@ LocalMemory 双层存储架构：
 - 文件消息：检查扩展名（仅 .xlsx/.xls/.csv/.pdf/.docx）-> 下载到 data/uploads/ -> 解析
 - 消息解密：AES 解密（pycryptodome）
 - 进程管理：ws_manager 管理 WebSocket 子进程，最大重启 5 次，冷却 30 秒
+- 流式体验：收到消息立即回执"已收到，正在思考..."，路由/规划/执行各阶段推送"思考过程"进度消息
+- 多模态：图片消息下载后经 VLM 解析为结构化表格内容参与分析
+- 审批交互：高危操作发送交互卡片（批准/拒绝按钮），card.action.trigger 回调（WS 长连接事件帧）3 秒内响应，批准后后台线程执行技能并推送结果
 
 ---
 
@@ -352,8 +375,15 @@ Agent_feishu/
 │   │   ├── keyword_tool.py       # SEO 关键词分析
 │   │   ├── ticket_tool.py        # 工单管理
 │   │   └── ws_manager.py         # WebSocket 进程管理
+│   ├── mcp_server/
+│   │   └── registry.py           # MCP 技能注册中心（manifest 热加载 + version 计数）
 │   ├── utils/
-│   │   └── timeout.py            # 超时装饰器
+│   │   ├── timeout.py            # 超时装饰器（线程上下文传播）
+│   │   ├── token_tracker.py      # Token 归属记账（thread-local + LangChain 回调）
+│   │   ├── approval.py           # 审批管理器（高危关键词门控 + 挂起执行）
+│   │   ├── action_log.py         # 审批动作日志（SQLite）
+│   │   ├── security.py           # API 鉴权
+│   │   └── tracing.py            # 节点耗时追踪
 │   ├── config.py                 # 配置管理（环境变量）
 │   ├── prompts.py                # Prompt 模板
 │   └── main.py                   # FastAPI 入口
@@ -361,7 +391,7 @@ Agent_feishu/
 │   ├── documents/                # 知识库文档（.txt/.md）
 │   ├── uploads/                  # 上传文件
 │   └── vectorstore/              # FAISS 索引 + 哈希注册表 + 查询缓存
-├── tests/                        # 12 个测试文件（详见第 16 节）
+├── tests/                        # 单元测试 + tests/integration 集成流程（详见第 16 节）
 ├── scripts/
 │   └── init_db.py                # 数据库初始化
 ├── .github/workflows/
@@ -372,6 +402,7 @@ Agent_feishu/
 ├── .env.example                  # 环境变量模板
 ├── .gitignore
 ├── requirements.txt
+├── skills_manifest.json          # 技能清单（MCP 动态注册数据源，可热编辑）
 ├── CHANGELOG.md
 └── README.md
 ```
@@ -467,7 +498,12 @@ docker compose down
 | DELETE | /documents/{name} | 删除文档 |
 | POST | /rag/sync | 同步向量库（?force=true 全量重建） |
 | GET | /rag/status | RAG 状态 |
+| GET | /metrics/usage | 分技能 Token 消耗统计（近 24h 排行） |
+| GET | /health/jingang | 金刚消耗监控 |
+| POST | /approval/{approval_id}/resolve | 审批单批准/拒绝（?approved=true/false） |
 | POST | /feishu/webhook | 飞书 Webhook |
+
+> /chat、/rag/query、/approval 等写接口支持 X-API-Key 鉴权（环境变量 API_KEY 配置，留空关闭）。
 
 ---
 
@@ -476,13 +512,14 @@ docker compose down
 1. 访问 https://open.feishu.cn/app 创建企业自建应用
 2. 添加权限：doc:document:readonly, im:message:readonly, im:resource:readonly, im:message:send_as_bot
 3. 配置事件订阅：选择长连接模式，订阅 im.message.receive_v1
-4. 设置 Encrypt Key 和 Verification Token
-5. 发布应用
+4. 配置卡片回调：回调配置选择"使用长连接接收"，并在"已订阅的回调"中添加卡片回传交互（card.action.trigger），否则审批按钮点击报 200340
+5. 设置 Encrypt Key 和 Verification Token
+6. 发布应用
 ---
 
 ## 16. 单元测试
 
-共 12 个测试文件，覆盖路由、工作流、记忆、安全、工具、调度等核心模块。
+共 20+ 个测试文件（含 tests/integration 6 个端到端流程文件，38 个集成用例），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪等核心模块。
 
 ### 共享 Fixture（conftest.py）
 
@@ -608,7 +645,13 @@ GitHub Actions（.github/workflows/ci.yml）：
 | 日志级别 | LOG_LEVEL | INFO | 日志级别 |
 | 服务端口 | APP_PORT | 8000 | HTTP 端口 |
 | 混合检索权重 | HYBRID_ALPHA | 0.6 | 向量搜索权重（BM25 = 1-alpha） |
+| 时间衰减系数 | TIME_DECAY_LAMBDA | 0.01 | RAG 时间衰减指数系数 |
 | WS Worker 数 | WS_MAX_WORKERS | 3 | 飞书消息处理线程数 |
+| Router LLM | ROUTER_API_KEY/BASE/MODEL_NAME | 复用 LLM_* | 路由专用模型（可指向更快模型） |
+| VLM | VLM_API_KEY/BASE/MODEL_NAME | 复用 LLM_* | 多模态视觉模型 |
+| LLM 供应商 | LLM_PROVIDER | 自动检测 | DashScope/OpenAI |
+| API 鉴权 | API_KEY | "" | HTTP 接口 X-API-Key，留空关闭鉴权 |
+| 审批门 | APPROVAL_ENABLED | false | 高危操作（降价/打折等）飞书审批开关 |
 
 ---
 

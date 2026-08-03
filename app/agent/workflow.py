@@ -13,6 +13,7 @@ from app.utils.timeout import timeout
 from app.utils.tracing import trace_node
 from app.monitoring import monitoring_stats
 from app.utils.security import detect_injection, SAFE_BLOCK_RESPONSE
+from app.utils.token_tracker import track_as
 
 logger = logging.getLogger("workflow")
 
@@ -156,7 +157,9 @@ def planner(state):
     try:
         llm = get_llm()
         plan_start = time.time()
-        response = _planner_llm_call(llm, [HumanMessage(content=prompt)])
+        # 归属标签: 规划 LLM 调用的 token 记入 "planner"
+        with track_as("planner", state.get("conversation_id", "")):
+            response = _planner_llm_call(llm, [HumanMessage(content=prompt)])
         raw = response.content if hasattr(response, "content") else str(response)
         raw = strip_thinking(raw)
         logger.info(
@@ -343,12 +346,7 @@ def _run_unknown_skill(state, user_input):
                 "total_tokens": tu.get("total_tokens", 0),
             }
             monitoring_stats.record_llm_call(llm_duration, token_usage=token_usage_dict)
-            monitoring_stats.record_token_usage(
-                skill_name="unknown",
-                input_tokens=token_usage_dict.get("prompt_tokens", 0),
-                output_tokens=token_usage_dict.get("completion_tokens", 0),
-                conversation_id=state.get("conversation_id", ""),
-            )
+            # Token 落库由 TokenTrackingHandler 统一完成 (owner="unknown"), 避免重复记账
         _accumulate_token_usage(state, token_usage_dict)
     except Exception as e:
         reply = "Error processing request: %s" % str(e)
@@ -374,33 +372,70 @@ def _accumulate_token_usage(state, delta):
 def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_result, state):
     """执行单个技能, 返回结果"""
     skill_start = time.time()
-    # 高危操作审批门（APPROVAL_ENABLED=true 时生效）；局部导入避免循环依赖
-    from app.utils.approval import should_gate, gate_and_wait
-    if should_gate(skill_name):
-        if not gate_and_wait(skill_name, state.get("conversation_id", ""), (user_input or "")[:100]):
-            logger.warning("[skill_executor] skill=%s blocked by approval (rejected/timeout)" % skill_name)
-            return {"type": "chat", "data": "该操作需要人工审批，未获批准或已超时，未执行。"}
+    # 高危操作审批门（APPROVAL_ENABLED=true 时生效）：非阻塞设计。
+    # 创建审批单后立即返回待审批结果, 由飞书端发送审批卡片,
+    # 用户点击卡片按钮 (card.action.trigger 回调) 后才真正执行。
+    from app.utils.approval import should_gate, approval_manager
+    if should_gate(skill_name, user_input or ""):
+        conversation_id = state.get("conversation_id", "")
+        description = (user_input or "")[:100]
+        ctx = {"approval_id": ""}
+
+        def _deferred():
+            return _execute_approved_skill(
+                skill_name, user_input, file_path, file_content, tool_result,
+                conversation_id, ctx["approval_id"],
+            )
+
+        aid = approval_manager.create_approval(
+            action_name=skill_name,
+            action_func=_deferred,
+            conversation_id=conversation_id,
+            description=description,
+        )
+        ctx["approval_id"] = aid
+        try:
+            from app.utils.action_log import log_action
+            log_action(approval_id=aid, skill_name=skill_name, description=description,
+                       decision="pending", conversation_id=conversation_id)
+        except Exception:
+            pass
+        logger.warning(
+            "[skill_executor] skill=%s gated, approval_id=%s, waiting for card action"
+            % (skill_name, aid)
+        )
+        return {
+            "type": "approval_required",
+            "data": {
+                "approval_id": aid,
+                "skill": skill_name,
+                "description": description,
+                "response": "\u23f3 该操作属于高危操作，需要人工审批。已发送审批卡片，请在卡片上点击【批准并执行】或【拒绝】。",
+            },
+        }
     try:
-        if skill_name in SKILL_REGISTRY:
-            result = SKILL_REGISTRY[skill_name](
-                user_input, file_path, file_content, tool_result
-            )
-            monitoring_stats.record_skill_call(
-                skill_name, time.time() - skill_start
-            )
-        elif skill_name == "unknown" and tool_result.get("injection_blocked"):
-            # router 入口已拦截: 直接返回安全回复 (第二道防线由 _run_unknown_skill 保留)
-            logger.info(
-                "[skill_executor] injection already blocked at router, "
-                "return safe response directly | conversation_id=%s"
-                % state.get("conversation_id", "?")
-            )
-            result = {"type": "chat", "data": SAFE_BLOCK_RESPONSE}
-        elif skill_name == "unknown":
-            result = _run_unknown_skill(state, user_input)
-        else:
-            logger.warning("[skill_executor] unknown skill=%s, fallback" % skill_name)
-            result = _run_unknown_skill(state, user_input)
+        # 归属标签: 技能内部 LLM 调用的 token 记入该技能名下
+        with track_as(skill_name, state.get("conversation_id", "")):
+            if skill_name in SKILL_REGISTRY:
+                result = SKILL_REGISTRY[skill_name](
+                    user_input, file_path, file_content, tool_result
+                )
+                monitoring_stats.record_skill_call(
+                    skill_name, time.time() - skill_start
+                )
+            elif skill_name == "unknown" and tool_result.get("injection_blocked"):
+                # router 入口已拦截: 直接返回安全回复 (第二道防线由 _run_unknown_skill 保留)
+                logger.info(
+                    "[skill_executor] injection already blocked at router, "
+                    "return safe response directly | conversation_id=%s"
+                    % state.get("conversation_id", "?")
+                )
+                result = {"type": "chat", "data": SAFE_BLOCK_RESPONSE}
+            elif skill_name == "unknown":
+                result = _run_unknown_skill(state, user_input)
+            else:
+                logger.warning("[skill_executor] unknown skill=%s, fallback" % skill_name)
+                result = _run_unknown_skill(state, user_input)
     except Exception as e:
         logger.error(
             "[skill_executor] skill=%s error: %s" % (skill_name, str(e)),
@@ -414,6 +449,51 @@ def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_
             skill_name, time.time() - skill_start, success=False
         )
     return result
+
+
+def _execute_approved_skill(skill_name, user_input, file_path, file_content, tool_result, conversation_id, approval_id=""):
+    """审批通过后执行技能: 结果推送到飞书会话 + 写动作日志"""
+    from app.utils.action_log import log_action
+    try:
+        with track_as(skill_name, conversation_id):
+            if skill_name in SKILL_REGISTRY:
+                result = SKILL_REGISTRY[skill_name](
+                    user_input, file_path, file_content, tool_result
+                )
+            else:
+                result = _run_unknown_skill(
+                    {"conversation_id": conversation_id, "history": [], "history_summary": None},
+                    user_input,
+                )
+        text = _extract_text_from_result(result)
+        try:
+            from app.tools.feishu_tool import feishu_tool
+            feishu_tool.send_message(
+                conversation_id,
+                "\u2705 审批已通过，操作已执行。结果：\n\n" + text[:3500],
+            )
+        except Exception as e:
+            logger.error("[approval_exec] send result failed: %s" % e)
+        log_action(approval_id=approval_id, skill_name=skill_name,
+                   description=(user_input or "")[:100], decision="executed",
+                   conversation_id=conversation_id, result=str(text)[:200])
+        return result
+    except Exception as e:
+        logger.error("[approval_exec] skill=%s error: %s" % (skill_name, e), exc_info=True)
+        try:
+            log_action(approval_id=approval_id, skill_name=skill_name,
+                       description=(user_input or "")[:100], decision="exec_failed",
+                       conversation_id=conversation_id, result=str(e)[:200])
+        except Exception:
+            pass
+        try:
+            from app.tools.feishu_tool import feishu_tool
+            feishu_tool.send_message(
+                conversation_id, "\u274c 已批准的操作执行失败：%s" % str(e)[:200]
+            )
+        except Exception:
+            pass
+        return None
 
 
 @trace_node("skill_executor")
@@ -513,18 +593,7 @@ def skill_executor(state):
     if results:
         state["tool_result"] = results[0]["result"]
 
-    # 记录 token 消耗
-    tu = state.get("token_usage", {})
-    if tu.get("total_tokens", 0) > 0:
-        primary_skill = (execution_plan[0]["skill"] if execution_plan
-                         else (state.get("skills_to_execute") or ["unknown"])[0])
-        monitoring_stats.record_token_usage(
-            skill_name=primary_skill,
-            input_tokens=tu.get("prompt_tokens", 0),
-            output_tokens=tu.get("completion_tokens", 0),
-            conversation_id=state.get("conversation_id", ""),
-        )
-
+    # Token 落库已由 TokenTrackingHandler 按技能归属实时完成, 此处无需重复记账
     logger.info(
         "[skill_executor] all done, results_count=%d, total_tokens=%d"
         % (len(results), state["token_usage"].get("total_tokens", 0))
@@ -632,7 +701,9 @@ def reflect(state):
     try:
         llm = get_llm()
         reflect_start = time.time()
-        response = _reflect_llm_call(llm, [HumanMessage(content=prompt)])
+        # 归属标签: 反思 LLM 调用的 token 记入 "reflect"
+        with track_as("reflect", state.get("conversation_id", "")):
+            response = _reflect_llm_call(llm, [HumanMessage(content=prompt)])
         raw = response.content if hasattr(response, "content") else str(response)
         raw = strip_thinking(raw)
 
@@ -733,7 +804,9 @@ def answer_node(state):
 
     try:
         llm = get_llm()
-        response = _call_llm(llm, [HumanMessage(content=prompt)])
+        # 归属标签: 综合回答 LLM 调用的 token 记入 "answer"
+        with track_as("answer", state.get("conversation_id", "")):
+            response = _call_llm(llm, [HumanMessage(content=prompt)])
         reply = response.content if hasattr(response, "content") else str(response)
         reply = strip_thinking(reply)
 

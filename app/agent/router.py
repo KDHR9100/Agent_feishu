@@ -8,6 +8,7 @@ from app.prompts import ROUTER_PROMPT
 from app.utils.timeout import timeout, TimeoutException
 from app.mcp_server import skill_registry
 from app.utils.security import detect_injection, SAFE_BLOCK_RESPONSE, wrap_untrusted
+from app.utils.token_tracker import track_as
 
 logger = logging.getLogger("router")
 
@@ -34,12 +35,32 @@ def _build_tools():
     return tool_list
 
 
-tools = _build_tools()
-
 # ============================================================
-# Keyword fallback: 从 manifest 动态加载(替代硬编码)
+# 热插拔缓存: 按 registry 版本号驱动, manifest 变化时自动重建
 # ============================================================
 KEYWORD_RULES = skill_registry.get_keyword_rules()
+
+_cache = {
+    "version": -1,          # 与 registry.version 对比, 不一致则重建
+    "tools": None,          # StructuredTool 列表
+    "llm_with_tools": None,  # bind_tools 后的 LLM
+}
+
+
+def _ensure_tools_fresh():
+    """每次路由前检查 manifest 是否变化; 有变化则重建工具列表与关键词表"""
+    global KEYWORD_RULES
+    skill_registry.reload_if_changed()
+    ver = skill_registry.version
+    if _cache["version"] != ver:
+        _cache["tools"] = _build_tools()
+        KEYWORD_RULES = skill_registry.get_keyword_rules()
+        _cache["llm_with_tools"] = None  # 使 bind_tools 缓存失效
+        _cache["version"] = ver
+        logger.info(
+            "[router] hot-reload: registry version=%d, skills=%d",
+            ver, skill_registry.skill_count,
+        )
 
 
 def _keyword_scores(user_input: str) -> dict:
@@ -65,15 +86,11 @@ def keyword_fallback(user_input: str) -> list:
     return sorted_skills
 
 
-_llm_with_tools = None
-
-
 def _get_llm_with_tools():
-    global _llm_with_tools
-    if _llm_with_tools is None:
+    if _cache["llm_with_tools"] is None:
         _llm = get_router_llm()
-        _llm_with_tools = _llm.bind_tools(tools)
-    return _llm_with_tools
+        _cache["llm_with_tools"] = _llm.bind_tools(_cache["tools"])
+    return _cache["llm_with_tools"]
 
 
 @timeout(30)
@@ -83,6 +100,8 @@ def _router_llm_call(llm_with_tools, messages):
 
 
 def router(state):
+    # 热插拔: 先检查 manifest 变化 (新增技能无需重启即可路由命中)
+    _ensure_tools_fresh()
     user_input = state["user_input"]
     file_path = state.get("file_path")
     file_content = state.get("file_content")
@@ -185,7 +204,9 @@ def router(state):
 
     try:
         llm_with_tools = _get_llm_with_tools()
-        response = _router_llm_call(llm_with_tools, messages)
+        # 归属标签: 本次 LLM 调用的 token 记入 "router"
+        with track_as("router", state.get("conversation_id", "")):
+            response = _router_llm_call(llm_with_tools, messages)
     except (TimeoutException, Exception) as e:
         llm_failed = True
         logger.warning("[router] LLM failed: %s, keyword fallback", str(e))

@@ -1,4 +1,4 @@
-﻿from .database import engine, Base
+from .database import engine, Base
 
 
 def init_db():

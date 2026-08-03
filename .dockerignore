@@ -10,3 +10,12 @@ tests/
 *.md
 *.pdf
 *.html
+
+# Private / runtime artifacts
+.env
+.env.*
+data/
+*.log
+venv/
+.pytest_cache/
+.mypy_cache/

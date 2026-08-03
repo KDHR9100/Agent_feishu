@@ -21,6 +21,8 @@ class SkillRegistry:
         self._skills: List[Dict[str, Any]] = []
         self._keyword_rules: Dict[str, List[str]] = {}
         self._skill_map: Dict[str, Dict[str, Any]] = {}
+        self._version = 0
+        self._manifest_mtime = None
         self._load()
 
     def _load(self):
@@ -33,15 +35,32 @@ class SkillRegistry:
             self._keyword_rules = {
                 s["name"]: s.get("keywords", []) for s in self._skills
             }
+            try:
+                self._manifest_mtime = os.path.getmtime(self._manifest_path)
+            except OSError:
+                self._manifest_mtime = None
+            self._version += 1
             logger.info(
-                "[mcp_registry] loaded %d skills from %s"
-                % (len(self._skills), self._manifest_path)
+                "[mcp_registry] loaded %d skills from %s (version=%d)"
+                % (len(self._skills), self._manifest_path, self._version)
             )
         except Exception as e:
             logger.error("[mcp_registry] failed to load manifest: %s", e)
             self._skills = []
             self._keyword_rules = {}
             self._skill_map = {}
+
+    def reload_if_changed(self) -> bool:
+        """热插拔: 检测 manifest 文件变化(mtime), 有变化则重载, 返回是否重载"""
+        try:
+            mtime = os.path.getmtime(self._manifest_path)
+        except OSError:
+            return False
+        if self._manifest_mtime is not None and mtime == self._manifest_mtime:
+            return False
+        logger.info("[mcp_registry] manifest change detected, hot-reloading...")
+        self._load()
+        return True
 
     def reload(self):
         """热重载: 运行时重新读取 manifest(支持新增技能不重启)"""
@@ -84,7 +103,13 @@ class SkillRegistry:
             self._skills.append(skill_def)
             self._skill_map[name] = skill_def
         self._keyword_rules[name] = skill_def.get("keywords", [])
-        logger.info("[mcp_registry] registered skill: %s", name)
+        self._version += 1
+        logger.info("[mcp_registry] registered skill: %s (version=%d)", name, self._version)
+
+    @property
+    def version(self) -> int:
+        """版本号: 每次 manifest 加载/运行时注册都会递增"""
+        return self._version
 
     @property
     def skill_count(self) -> int:

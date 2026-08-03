@@ -1,4 +1,4 @@
-﻿"""任务4: MCP动态工具注册 单元测试"""
+"""任务4: MCP动态工具注册 单元测试"""
 import os
 import sys
 import json

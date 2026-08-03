@@ -1,4 +1,4 @@
-﻿from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 import datetime
 from typing import Optional
 

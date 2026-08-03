@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
 import time
 import os
 
@@ -101,11 +102,13 @@ async def chat(request: ChatRequest, _: None = Depends(require_api_key)):
         from app.agent.workflow import agent
 
         logger.debug("Using workflow mode")
-        result = agent.invoke(
+        # 避免同步 invoke 阻塞事件循环（并发请求互相卡死）
+        result = await asyncio.to_thread(
+            agent.invoke,
             {
                 "user_input": request.message,
                 "conversation_id": request.conversation_id,
-            }
+            },
         )
         duration = time.time() - start_time
         monitoring_stats.record_skill_call("workflow", duration)
@@ -355,8 +358,19 @@ async def metrics_usage(_: None = Depends(require_api_key)):
 @app.post("/approval/{approval_id}/resolve")
 async def resolve_approval(approval_id: str, approved: bool, _: None = Depends(require_api_key)):
     """Resolve a pending approval (approve or reject)."""
+    import threading
     from app.utils.approval import approval_manager
+    from app.utils.action_log import log_action
     ok = approval_manager.resolve(approval_id, approved)
     if not ok:
         raise HTTPException(status_code=404, detail="Approval not found or already resolved")
+    log_action(approval_id=approval_id, decision="approved" if approved else "rejected",
+               operator="api")
+    if approved:
+        # 批准后后台执行被挂起的技能（与飞书卡片回调路径一致）
+        threading.Thread(
+            target=approval_manager.take_and_execute,
+            args=(approval_id,),
+            daemon=True,
+        ).start()
     return {"approval_id": approval_id, "approved": approved, "resolved": True}

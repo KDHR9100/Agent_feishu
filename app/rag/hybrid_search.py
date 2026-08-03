@@ -163,11 +163,14 @@ class HybridSearcher:
             docs = self.vector_store.similarity_search(query, k=k)
             results = []
             for i, doc in enumerate(docs):
-                results.append({
+                item = {
                     "content": doc.page_content,
-                    "score": 1.0 / (i + 1),  # 按排名赋初始分数
+                    "score": 1.0 / (i + 1),
                     "source": doc.metadata.get("source", "vector") if doc.metadata else "vector",
-                })
+                }
+                if doc.metadata and doc.metadata.get("last_updated"):
+                    item["last_updated"] = doc.metadata["last_updated"]
+                results.append(item)
             return results
         except Exception as e:
             logger.warning("[HybridSearch] 向量搜索失败: %s", e)
@@ -228,6 +231,9 @@ class HybridSearcher:
                 content_scores[content]["source"] = "hybrid"
             else:
                 content_scores[content] = {"score": rrf_score, "source": "bm25"}
+            # 透传文档更新时间，供时间衰减排序使用
+            if item.get("last_updated") and not content_scores[content].get("last_updated"):
+                content_scores[content]["last_updated"] = item["last_updated"]
 
         # 向量结果的 RRF 分数 (权重 = HYBRID_ALPHA)
         for rank, item in enumerate(vector_results):
@@ -238,12 +244,17 @@ class HybridSearcher:
                 content_scores[content]["source"] = "hybrid"
             else:
                 content_scores[content] = {"score": rrf_score, "source": "vector"}
+            # 透传文档更新时间，供时间衰减排序使用
+            if item.get("last_updated") and not content_scores[content].get("last_updated"):
+                content_scores[content]["last_updated"] = item["last_updated"]
 
         # 按 RRF 分数降序排列
-        merged = [
-            {"content": content, "score": info["score"], "source": info["source"]}
-            for content, info in content_scores.items()
-        ]
+        merged = []
+        for content, info in content_scores.items():
+            entry = {"content": content, "score": info["score"], "source": info["source"]}
+            if info.get("last_updated"):
+                entry["last_updated"] = info["last_updated"]
+            merged.append(entry)
         merged.sort(key=lambda x: x["score"], reverse=True)
 
         return merged

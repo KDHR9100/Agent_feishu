@@ -98,6 +98,22 @@ class ApprovalManager:
             entry = self._pending.pop(approval_id, None)
             return bool(entry.get("approved")) if entry else False
 
+    def take_and_execute(self, approval_id: str) -> Optional[Any]:
+        """弹出已批准的审批条目并执行其 action (审批回调通过后由后台线程调用)"""
+        with self._lock:
+            entry = self._pending.pop(approval_id, None)
+        if not entry:
+            logger.warning("[approval] %s not found when executing", approval_id)
+            return None
+        if not entry.get("approved"):
+            logger.info("[approval] %s not approved, skip execution", approval_id)
+            return None
+        if time.time() - entry["created_at"] > APPROVAL_TIMEOUT:
+            logger.info("[approval] %s expired before execution", approval_id)
+            return None
+        logger.info("[approval] executing approved action: %s", entry["action_name"])
+        return entry["action_func"](*entry["action_args"], **entry["action_kwargs"])
+
     def get_pending(self, approval_id: str) -> Optional[dict]:
         """查询审批状态"""
         with self._lock:
@@ -128,16 +144,29 @@ class ApprovalManager:
 # 全局单例
 approval_manager = ApprovalManager()
 
-# 需要审批的技能标记
-REQUIRES_APPROVAL_SKILLS = {"inventory_skill", "support_skill"}
+# 需要审批的技能标记 (默认留空: 高危动作以指令关键词识别为主,
+# 避免库存预警等正常查询被误拦截)
+REQUIRES_APPROVAL_SKILLS = set()
 
-# 审批门总开关（默认关闭）；设为 true 时 REQUIRES_APPROVAL_SKILLS 中的技能执行前需人工批准
+# 高危动作关键词: 用户指令包含这些词时, 对应技能执行前需人工审批 (如降价)
+HIGH_RISK_KEYWORDS = [
+    "降价", "减价", "调价", "改价", "打折", "折扣",
+    "下架", "删除商品", "清仓", "停售",
+]
+
+# 审批门总开关（默认关闭）；设为 true 时高危动作执行前需人工批准
 APPROVAL_ENABLED = os.getenv("APPROVAL_ENABLED", "false").lower() == "true"
 
 
-def should_gate(skill_name: str) -> bool:
-    """判断某技能执行前是否需要审批门"""
-    return APPROVAL_ENABLED and skill_name in REQUIRES_APPROVAL_SKILLS
+def should_gate(skill_name: str, user_input: str = "") -> bool:
+    """判断某次执行是否需要审批门: 技能在标记集合中, 或指令含高危动作关键词"""
+    if not APPROVAL_ENABLED:
+        return False
+    if skill_name in REQUIRES_APPROVAL_SKILLS:
+        return True
+    if user_input:
+        return any(kw in user_input for kw in HIGH_RISK_KEYWORDS)
+    return False
 
 
 def gate_and_wait(skill_name: str, conversation_id: str = "", description: str = "", timeout: float = None) -> bool:

@@ -1,4 +1,4 @@
-﻿from dotenv import load_dotenv
+from dotenv import load_dotenv
 import os
 import logging
 from logging.config import dictConfig
@@ -153,6 +153,7 @@ def get_router_llm():
     global _router_llm_instance
     if _router_llm_instance is None:
         from langchain_openai import ChatOpenAI
+        from app.utils.token_tracker import TokenTrackingHandler
 
         logger.info(
             "Initializing Router LLM: %s (base: %s)"
@@ -164,6 +165,7 @@ def get_router_llm():
             max_tokens=config.LLM_MAX_TOKENS,
             api_key=config.ROUTER_API_KEY,
             base_url=config.ROUTER_API_BASE,
+            callbacks=[TokenTrackingHandler()],
         )
     return _router_llm_instance
 
@@ -172,6 +174,7 @@ def get_llm():
     global _llm_instance
     if _llm_instance is None:
         from langchain_openai import ChatOpenAI
+        from app.utils.token_tracker import TokenTrackingHandler
 
         logger.info(
             "Initializing LLM: %s (Provider: %s)"
@@ -187,6 +190,7 @@ def get_llm():
                 base_url=config.LLM_API_BASE,
                 timeout=config.LLM_REQUEST_TIMEOUT,
                 max_retries=config.LLM_MAX_RETRIES,
+                callbacks=[TokenTrackingHandler()],
             )
             logger.info("LLM initialized successfully")
         except Exception as e:

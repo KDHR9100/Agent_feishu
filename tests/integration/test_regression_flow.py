@@ -45,8 +45,9 @@ class TestAllSkillsRegistered:
         assert skill_registry.skill_count == 12
 
     def test_router_tools_has_12(self):
-        from app.agent.router import tools
-        assert len(tools) == 12
+        from app.agent import router
+        router._ensure_tools_fresh()
+        assert len(router._cache["tools"]) == 12
 
     def test_skill_registry_has_12(self):
         from app.agent.workflow import SKILL_REGISTRY

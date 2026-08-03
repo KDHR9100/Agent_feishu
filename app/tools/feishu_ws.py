@@ -113,6 +113,84 @@ def _build_greeting_card() -> str:
     }
     return json.dumps(card, ensure_ascii=False)
 
+
+def _safe_reply(message_id, text, msg_type="text"):
+    """安全回复: 发送失败不影响主流程"""
+    try:
+        feishu_tool.reply_message(message_id, text, msg_type=msg_type)
+    except Exception as e:
+        logger.warning("[Feishu WS] reply failed: %s", e)
+
+
+def _build_approval_card(info: dict) -> str:
+    """构建人工审批交互卡片 (1.0 JSON; 按钮 value 携带 approval_id 供回调)"""
+    approval_id = info.get("approval_id", "")
+    skill = info.get("skill", "")
+    desc = info.get("description", "")
+    card = {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "\u26a0\ufe0f 高危操作审批请求"},
+            "template": "red",
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "**操作内容**：%s" % (desc or skill)},
+            },
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**关联技能**：%s\n**审批单号**：%s" % (skill, approval_id),
+                },
+            },
+            {"tag": "note", "elements": [{"tag": "plain_text", "content": "点击按钮后 Agent 才会执行/放弃该操作"}]},
+            {"tag": "hr"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "\u2705 批准并执行"},
+                        "type": "danger",
+                        "value": {"approval_id": approval_id, "action": "approve"},
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "\u274c 拒绝"},
+                        "type": "default",
+                        "value": {"approval_id": approval_id, "action": "reject"},
+                    },
+                ],
+            },
+        ],
+    }
+    return json.dumps(card, ensure_ascii=False)
+
+
+def _build_approval_resolved_card(approval_id, skill, desc, approved):
+    """构建审批结果卡片 (回调响应中用于更新原卡片, 1.0 JSON)"""
+    status = "\u2705 已批准，操作已执行" if approved else "\u274c 已拒绝，操作未执行"
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "\u26a0\ufe0f 高危操作审批请求"},
+            "template": "green" if approved else "grey",
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "**操作内容**：%s" % (desc or skill)},
+            },
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "**审批结果**：%s\n**审批单号**：%s" % (status, approval_id)},
+            },
+        ],
+    }
+
+
 # 确保 Lark SDK 日志也输出到 app.log
 _lark_logger = logging.getLogger("Lark")
 _lark_logger.setLevel(logging.INFO)
@@ -308,6 +386,9 @@ def _handle_single_message(msg):
     try:
         logger.info("[Feishu WS] [%s] Processing message (thread=%s)", track_id, threading.current_thread().name)
 
+        # 即时回执: 保证 3 秒内送达首片消息 (流式体验 P2 要求)
+        _safe_reply(msg["message_id"], "\U0001f914 已收到，正在思考...")
+
         # ---------- 文件下载与解析 ----------
         file_path = None
         file_content = None
@@ -405,30 +486,30 @@ def _handle_single_message(msg):
                     "help_skill": "帮助中心",
                     "order_skill": "订单管理",
                 }
-                progress_sent = set()
                 _cached_skills = []
                 result = None
                 try:
                     for chunk in agent.stream(agent_input):
                         for node_name, node_state in chunk.items():
-                            # 进入 router 时推送思考状态
-                            if node_name == "router" and "router" not in progress_sent:
-                                try:
-                                    feishu_tool.reply_message(msg["message_id"], "🤔 正在分析意图...")
-                                except Exception:
-                                    pass
-                                _cached_skills = node_state.get("skills_to_execute", [])
-                                progress_sent.add("router")
-                            # 进入 skill_executor 时推送技能调用状态
-                            elif node_name == "skill_executor" and "skill" not in progress_sent:
-                                skills = node_state.get("skills_to_execute") or _cached_skills
+                            # router 完成: 推送思考过程 (意图识别结果)
+                            if node_name == "router":
+                                skills = node_state.get("skills_to_execute", [])
+                                _cached_skills = skills
                                 _raw = skills[0] if skills else ""
                                 skill_label = _SKILL_CN.get(_raw, _raw) if _raw else "处理"
-                                try:
-                                    feishu_tool.reply_message(msg["message_id"], f"📊 正在调用 [{skill_label}]...")
-                                except Exception:
-                                    pass
-                                progress_sent.add("skill")
+                                _safe_reply(msg["message_id"], "\U0001f4ad 思考：已识别意图，将调用 [%s]" % skill_label)
+                            # planner 完成: 多步计划时推送执行计划思考
+                            elif node_name == "planner":
+                                plan = node_state.get("execution_plan")
+                                if plan:
+                                    steps = "\n".join(
+                                        "%d. %s" % (i, _SKILL_CN.get(s.get("skill", ""), s.get("skill", "")))
+                                        for i, s in enumerate(plan, 1)
+                                    )
+                                    _safe_reply(msg["message_id"], "\U0001f4ad 思考过程（执行计划）：\n" + steps)
+                            # skill_executor 完成: 正在组织最终答案
+                            elif node_name == "skill_executor":
+                                _safe_reply(msg["message_id"], "\U0001f4ca 技能执行完成，正在整理答案...")
                             result = node_state
                 except Exception as stream_err:
                     logger.warning("[Feishu WS] [%s] stream failed, fallback to invoke: %s", track_id, stream_err)
@@ -436,6 +517,15 @@ def _handle_single_message(msg):
 
                 if result:
                     answer = result.get("answer", "抱歉，我无法处理您的请求。")
+                    # 高危操作审批流: 发送交互审批卡片 (点击按钮后才执行)
+                    _tool_res = result.get("tool_result") or {}
+                    if _tool_res.get("type") == "approval_required":
+                        try:
+                            card_json = _build_approval_card(_tool_res.get("data", {}))
+                            _safe_reply(msg["message_id"], card_json, msg_type="interactive")
+                            logger.info("[Feishu WS] [%s] approval card sent", track_id)
+                        except Exception as e:
+                            logger.error("[Feishu WS] [%s] approval card failed: %s", track_id, e)
                 else:
                     answer = "抱歉，我无法处理您的请求。"
                 logger.info("[Feishu WS] [%s] Agent done, answer length=%d", track_id, len(answer))
@@ -476,6 +566,77 @@ def process_messages():
                 logger.error("[Feishu WS] Dispatcher error: %s", str(e))
 
 
+def do_p2_card_action_trigger(data):
+    """卡片回传交互回调: 审批按钮点击。
+    新版回调 card.action.trigger 支持长连接订阅; 必须 3 秒内返回,
+    因此耗时的技能执行放到后台线程, 回调只负责决策+响应。"""
+    from lark_oapi.event.callback.model.p2_card_action_trigger import (
+        P2CardActionTriggerResponse,
+    )
+    from app.utils.approval import approval_manager
+    from app.utils.action_log import log_action
+
+    try:
+        event = data.event
+        action = event.action
+        value = (action.value if action else None) or {}
+        approval_id = value.get("approval_id", "")
+        act = value.get("action", "")
+        operator = event.operator.open_id if (event and event.operator) else ""
+        logger.info(
+            "[Feishu WS] card action received: approval_id=%s act=%s operator=%s",
+            approval_id, act, operator,
+        )
+
+        entry = approval_manager.get_pending(approval_id)
+        if entry is None:
+            return P2CardActionTriggerResponse({
+                "toast": {"type": "warning", "content": "审批单已过期或不存在"},
+            })
+
+        skill = entry.get("action_name", "")
+        desc = entry.get("description", "")
+        conversation_id = entry.get("conversation_id", "")
+
+        if act == "approve":
+            approval_manager.resolve(approval_id, True)
+            log_action(approval_id=approval_id, skill_name=skill, description=desc,
+                       decision="approved", operator=operator, conversation_id=conversation_id)
+            # 后台线程执行已批准的操作 (技能调用+结果推送), 保证回调 3 秒内返回
+            threading.Thread(
+                target=_run_approved_async, args=(approval_id,), daemon=True
+            ).start()
+            toast = {"type": "success", "content": "已批准，正在执行操作..."}
+            card_data = _build_approval_resolved_card(approval_id, skill, desc, True)
+        elif act == "reject":
+            approval_manager.resolve(approval_id, False)
+            approval_manager.reject(approval_id)  # 弹出 entry, 防止重复处理
+            log_action(approval_id=approval_id, skill_name=skill, description=desc,
+                       decision="rejected", operator=operator, conversation_id=conversation_id)
+            toast = {"type": "info", "content": "已拒绝，该操作不会执行"}
+            card_data = _build_approval_resolved_card(approval_id, skill, desc, False)
+        else:
+            logger.warning("[Feishu WS] unknown card action: %s", act)
+            return None
+
+        return P2CardActionTriggerResponse({
+            "toast": toast,
+            "card": {"type": "raw", "data": card_data},
+        })
+    except Exception as e:
+        logger.error("[Feishu WS] card action error: %s", e, exc_info=True)
+        return None
+
+
+def _run_approved_async(approval_id):
+    """后台线程: 弹出已批准的审批条目并执行其 action (技能调用+结果推送)"""
+    from app.utils.approval import approval_manager
+    try:
+        approval_manager.take_and_execute(approval_id)
+    except Exception as e:
+        logger.error("[Feishu WS] approved action failed: %s", e, exc_info=True)
+
+
 def start_feishu_ws(app_id: str, app_secret: str):
     """启动飞书 WebSocket 客户端（官方SDK版本）"""
     if not app_id or not app_secret:
@@ -494,6 +655,7 @@ def start_feishu_ws(app_id: str, app_secret: str):
     # Create event handler with encrypt key and verification token
     event_handler = lark.EventDispatcherHandler.builder(encrypt_key, verification_token) \
         .register_p2_im_message_receive_v1(do_p2_im_message_receive_v1) \
+        .register_p2_card_action_trigger(do_p2_card_action_trigger) \
         .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(lambda x: None) \
         .register_p2_im_message_message_read_v1(lambda x: None) \
         .build()

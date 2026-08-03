@@ -91,3 +91,7 @@ data/documents/*
 !data/documents/.gitkeep
 data/reports/*
 !data/reports/.gitkeep
+
+# Temp dump files
+.tmp*
+*.tmp

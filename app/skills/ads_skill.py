@@ -1,10 +1,14 @@
-﻿import re
+import re
 from langchain_core.messages import HumanMessage, SystemMessage
 from typing import Optional
+
+import logging
 
 from app.config import get_llm
 from app.prompts import ADS_ANALYSIS_PROMPT
 from app.tools.database_tool import db_tool
+
+logger = logging.getLogger(__name__)
 
 
 def extract_ad_id_from_input(user_input: str) -> Optional[str]:
@@ -80,6 +84,29 @@ def compare_platforms(platform_data):
         "highest_ctr": highest_ctr,
         "highest_ctr_platform": highest_ctr_platform,
     }
+
+
+def _fallback_analysis(combined_data: dict) -> str:
+    """LLM 不可用时，基于 DB 聚合指标生成基础分析文本（降级路径）。"""
+    overall = combined_data.get("overall_metrics", {})
+    lines = [
+        "⚠️ AI 分析服务暂时不可用，以下为数据库聚合的原始指标：",
+        "- 总花费: ¥%s" % overall.get("total_spend", 0),
+        "- 总点击: %s" % overall.get("total_clicks", 0),
+        "- 总转化: %s" % overall.get("total_conversions", 0),
+        "- 总转化金额: ¥%s" % overall.get("total_conversion_value", 0),
+        "- 整体 ROI: %s" % overall.get("overall_roi", 0),
+        "- 整体 CTR: %s" % overall.get("overall_ctr", 0),
+        "- 整体 CPC: ¥%s" % overall.get("overall_cpc", 0),
+    ]
+    pc = combined_data.get("platform_comparison", {}) or {}
+    if pc.get("best_roas_platform"):
+        lines.append("- 最高 ROAS 平台: %s (ROAS %s)" % (pc.get("best_roas_platform"), pc.get("best_roas")))
+    if pc.get("lowest_cpc_platform"):
+        lines.append("- 最低 CPC 平台: %s (CPC ¥%s)" % (pc.get("lowest_cpc_platform"), pc.get("lowest_cpc")))
+    if pc.get("highest_ctr_platform"):
+        lines.append("- 最高 CTR 平台: %s (CTR %s)" % (pc.get("highest_ctr_platform"), pc.get("highest_ctr")))
+    return "\n".join(lines)
 
 
 def ads_skill(user_input: str):
@@ -179,7 +206,12 @@ def ads_skill(user_input: str):
         HumanMessage(content=prompt),
     ]
 
-    analysis = llm.invoke(messages).content
+    try:
+        analysis = llm.invoke(messages).content
+    except Exception as exc:
+        # LLM 超时/异常时降级：返回 DB 聚合原始指标，保证技能可用
+        logger.warning("ads_skill LLM analysis failed, degraded to raw metrics: %s", exc)
+        analysis = _fallback_analysis(combined_data)
 
     return {
         "type": "ads_analysis",

@@ -309,14 +309,25 @@ class DocVectorManager:
         from langchain_community.vectorstores import FAISS
         from app.rag.vectorstore import text_splitter
 
+        from datetime import datetime as _dt
+
         docs_info = self.doc_manager.list_documents()
-        all_texts = []
+        documents = []
         for d in docs_info:
             content = self.doc_manager.read_document(d["name"])
             if content:
-                all_texts.append(content)
+                # metadata 携带来源文件名与修改时间，供 RAG 时间衰减排序使用
+                documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": d["name"],
+                            "last_updated": _dt.utcfromtimestamp(d["modified"]).isoformat(),
+                        },
+                    )
+                )
 
-        if not all_texts:
+        if not documents:
             logger.warning("[DocSync] No documents to index")
             self.hash_registry.save()
             self.query_cache.clear()
@@ -327,8 +338,7 @@ class DocVectorManager:
         if os.path.exists(index_path):
             shutil.rmtree(index_path)
 
-        # Create documents and split into chunks
-        documents = [Document(page_content=t) for t in all_texts]
+        # Split into chunks（chunk 元数据继承自父文档）
         chunks = text_splitter.split_documents(documents)
 
         # Build new FAISS index
@@ -347,11 +357,11 @@ class DocVectorManager:
 
         logger.info(
             "[DocSync] Full rebuild: %d docs -> %d chunks",
-            len(all_texts), len(chunks)
+            len(documents), len(chunks)
         )
         return {
             "status": "full_rebuild",
-            "total_docs": len(all_texts),
+            "total_docs": len(documents),
             "total_chunks": len(chunks),
         }
 
@@ -360,18 +370,30 @@ class DocVectorManager:
         from app.rag.vectorstore import text_splitter
         from langchain_core.documents import Document
 
-        new_texts = []
+        from datetime import datetime as _dt
+
+        documents = []
         for name in added_files:
             content = self.doc_manager.read_document(name)
             if content:
-                new_texts.append(content)
+                # metadata 携带来源文件名与修改时间，供 RAG 时间衰减排序使用
+                path = os.path.join(self.doc_manager.DOCS_DIR, name)
+                mtime = os.path.getmtime(path) if os.path.exists(path) else time.time()
+                documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": name,
+                            "last_updated": _dt.utcfromtimestamp(mtime).isoformat(),
+                        },
+                    )
+                )
 
-        if not new_texts:
+        if not documents:
             self.hash_registry.save()
             return {"status": "no_changes", "added": 0}
 
         # Split and add to existing index
-        documents = [Document(page_content=t) for t in new_texts]
         chunks = text_splitter.split_documents(documents)
 
         if self.vector_store.vector_store is None:
@@ -382,7 +404,14 @@ class DocVectorManager:
                 chunks, self.vector_store.embeddings
             )
         else:
-            self.vector_store.vector_store.add_documents(chunks)
+            try:
+                self.vector_store.vector_store.add_documents(chunks)
+            except Exception as exc:
+                # 增量合并失败（如嵌入维度不匹配）时降级为全量重建
+                logger.warning(
+                    "[DocSync] Incremental add failed, falling back to full rebuild: %s", exc
+                )
+                return self._full_rebuild()
 
         self.vector_store.save_local()
         self.hash_registry.save()

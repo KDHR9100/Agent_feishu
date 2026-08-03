@@ -24,6 +24,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # 复制应用代码
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+# 技能清单（MCP 动态注册数据源，启动必需）
+COPY skills_manifest.json .
 
 # 创建数据目录
 RUN mkdir -p data/uploads data/vectorstore

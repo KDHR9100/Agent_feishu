@@ -1,4 +1,4 @@
-﻿from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import get_llm
 from app.prompts import HELP_PROMPT
