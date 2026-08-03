@@ -87,3 +87,7 @@ patch_cv*.py
 # Personal planning / chat history files
 制定转行求职学习计划.md
 历史对话查询*.md
+data/documents/*
+!data/documents/.gitkeep
+data/reports/*
+!data/reports/.gitkeep
