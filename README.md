@@ -1,4 +1,4 @@
-﻿# Ecommerce Agent（电商金刚）
+﻿# Ecommerce Agent
 
 基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库、文件解析、多轮对话记忆、Guardrails 安全防护等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
 
