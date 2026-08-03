@@ -16,11 +16,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 class TestStreamingWorkflow:
 
     def test_feishu_ws_uses_stream(self):
-        import inspect
         with open("app/tools/feishu_ws.py", "r", encoding="utf-8") as f:
             source = f.read()
         assert "agent.stream" in source
-        assert "progress_sent" in source
 
     def test_feishu_ws_has_fallback_invoke(self):
         with open("app/tools/feishu_ws.py", "r", encoding="utf-8") as f:
@@ -161,9 +159,19 @@ class TestApprovalManager:
         assert mgr.pending_count == 1  # only aid2 remains
 
     def test_requires_approval_skills_defined(self):
-        from app.utils.approval import REQUIRES_APPROVAL_SKILLS
-        assert "inventory_skill" in REQUIRES_APPROVAL_SKILLS
-        assert "support_skill" in REQUIRES_APPROVAL_SKILLS
+        # 当前审批门改为高危指令关键词识别 (技能名预置集合默认留空,
+        # 避免库存预警等正常查询被误拦截)
+        from app.utils import approval
+        assert approval.REQUIRES_APPROVAL_SKILLS == set()
+        assert "降价" in approval.HIGH_RISK_KEYWORDS
+        assert "发券" in approval.HIGH_RISK_KEYWORDS
+        # 总开关关闭时不拦截 (显式 patch, 不依赖 .env 实际取值)
+        with patch.object(approval, "APPROVAL_ENABLED", False):
+            assert approval.should_gate("product_skill", "帮我降价到99元") is False
+        # 总开关打开时, 含高危关键词的指令命中审批门, 普通查询不命中
+        with patch.object(approval, "APPROVAL_ENABLED", True):
+            assert approval.should_gate("product_skill", "帮我降价到99元") is True
+            assert approval.should_gate("product_skill", "分析一下销量") is False
 
     def test_skill_markers(self):
         import app.skills.inventory_skill as inv

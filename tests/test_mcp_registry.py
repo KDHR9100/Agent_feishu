@@ -120,8 +120,9 @@ class TestRouterDynamicLoading:
         assert len(KEYWORD_RULES) == 13
 
     def test_router_tools_count(self):
-        from app.agent.router import tools
-        assert len(tools) == 12
+        from app.agent.router import _build_tools
+        # L4: +pricing_skill 共 13 个
+        assert len(_build_tools()) == 13
 
     def test_router_keyword_fallback(self):
         from app.agent.router import keyword_fallback
@@ -139,8 +140,8 @@ class TestRouterDynamicLoading:
         assert result == []
 
     def test_router_tools_have_correct_names(self):
-        from app.agent.router import tools
-        tool_names = {t.name for t in tools}
+        from app.agent.router import _build_tools
+        tool_names = {t.name for t in _build_tools()}
         assert "product_skill" in tool_names
         assert "inventory_skill" in tool_names
         assert "support_skill" in tool_names

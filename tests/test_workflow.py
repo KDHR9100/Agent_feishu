@@ -4,8 +4,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class TestSkillRegistry:
     def test_all_router_tools_registered(self):
-        from app.agent.router import tools
+        from app.agent.router import _build_tools
         from app.agent.workflow import SKILL_REGISTRY
+        tools = _build_tools()
         router_skill_names = set()
         for tool in tools:
             router_skill_names.add(tool.name)

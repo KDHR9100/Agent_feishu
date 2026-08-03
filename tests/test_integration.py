@@ -27,8 +27,9 @@ def _mk_llm():
 class TestFullWorkflowTextMessage:
     @patch("app.agent.workflow.get_llm")
     @patch("app.agent.router.get_router_llm")
-    @patch("app.agent.router._llm_with_tools", None)
     def test_full_workflow_text_message(self, mock_router_llm, mock_wf_llm):
+        import app.agent.router as rm
+        rm._cache["llm_with_tools"] = None  # 失效 bind_tools 缓存, 确保使用 mock LLM
         ml, ml_t = _mk_llm()
         mock_router_llm.return_value = ml
         mock_wf_llm.return_value = ml
@@ -56,8 +57,8 @@ class TestSkillRegistryCompleteness:
                 "data_analysis_skill"]
 
     def test_router_tools(self):
-        from app.agent.router import tools
-        names = [t.name for t in tools]
+        from app.agent.router import _build_tools
+        names = [t.name for t in _build_tools()]
         for s in self.EXPECTED:
             assert s in names, f"router missing: {s}"
         # L4: +pricing_skill 共 13 个
@@ -72,9 +73,9 @@ class TestSkillRegistryCompleteness:
         assert len(SKILL_REGISTRY) == 13
 
     def test_sync(self):
-        from app.agent.router import tools
+        from app.agent.router import _build_tools
         from app.agent.workflow import SKILL_REGISTRY
-        assert set(t.name for t in tools) == set(SKILL_REGISTRY.keys())
+        assert set(t.name for t in _build_tools()) == set(SKILL_REGISTRY.keys())
 
 class TestGuardrailsIntegration:
     def test_safe_allowed(self):
@@ -141,7 +142,8 @@ class TestMemoryPersistenceIntegration:
 
 class TestRouterToolBinding:
     def test_bindable(self):
-        from app.agent.router import tools
+        from app.agent.router import _build_tools
+        tools = _build_tools()
         ml = MagicMock()
         ml.bind_tools.return_value = MagicMock()
         ml.bind_tools(tools)
@@ -154,7 +156,7 @@ class TestRouterToolBinding:
         ml_t.invoke.return_value = _mk_resp("", [tc])
         with patch("app.agent.router.get_router_llm", return_value=ml):
             import app.agent.router as rm
-            rm._llm_with_tools = None
+            rm._cache["llm_with_tools"] = None  # 失效 bind_tools 缓存, 使用本次 mock
             st = {"user_input": "check sales", "conversation_id": "tb"}
             r = rm.router(st)
             assert r["intent"] == "product_skill"
