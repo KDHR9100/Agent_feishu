@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 import json
 import logging
+import os
 import uuid
 
 from app.agent.workflow import agent
@@ -108,7 +109,8 @@ async def feishu_webhook(request: Request):
                     or content_json.get("media_id")
                     or ""
                 )
-                file_name = content_json.get("file_name", "unknown")
+                # 安全加固: 剥离目录成分防止路径穿越
+                file_name = os.path.basename(content_json.get("file_name", "") or "unknown")
                 file_size = content_json.get("file_size", 0)
 
                 logger.info(
@@ -121,7 +123,7 @@ async def feishu_webhook(request: Request):
 
                 if file_key:
                     # 下载文件
-                    save_path = f"data/uploads/{file_name}"
+                    save_path = f"data/uploads/{uuid.uuid4().hex[:8]}_{file_name}"
                     download_result = feishu_tool.download_message_resource(message_id, file_key, save_path)
 
                     if download_result.get("success"):

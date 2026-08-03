@@ -526,6 +526,18 @@ def _handle_single_message(msg):
                             logger.info("[Feishu WS] [%s] approval card sent", track_id)
                         except Exception as e:
                             logger.error("[Feishu WS] [%s] approval card failed: %s", track_id, e)
+                    # L4 任务12: 多目标冲突仲裁 -> 发送帕累托决策看板卡片 (A/B 点选)
+                    elif _tool_res.get("type") == "conflict_decision":
+                        try:
+                            card_obj = _tool_res.get("data", {}).get("card")
+                            _safe_reply(msg["message_id"], json.dumps(card_obj, ensure_ascii=False),
+                                        msg_type="interactive")
+                            logger.info(
+                                "[Feishu WS] [%s] conflict decision card sent, resolver_id=%s",
+                                track_id, _tool_res.get("data", {}).get("resolver_id"),
+                            )
+                        except Exception as e:
+                            logger.error("[Feishu WS] [%s] conflict card failed: %s", track_id, e)
                 else:
                     answer = "抱歉，我无法处理您的请求。"
                 logger.info("[Feishu WS] [%s] Agent done, answer length=%d", track_id, len(answer))
@@ -588,6 +600,34 @@ def do_p2_card_action_trigger(data):
             approval_id, act, operator,
         )
 
+        # 审批权限校验: 仅白名单操作者可批准/拒绝/点选决策方案 (未配置时默认拒绝)
+        from app.utils.approval import is_authorized_approver
+
+        if not is_authorized_approver(operator):
+            logger.warning(
+                "[Feishu WS] unauthorized card action blocked: operator=%s act=%s approval_id=%s",
+                operator, act, approval_id,
+            )
+            return P2CardActionTriggerResponse({
+                "toast": {"type": "warning", "content": "您没有审批权限"},
+            })
+
+        # L4 任务12: 决策看板点选回调 (choose_option) — 后台走仲裁执行链路, 3 秒内返回 toast
+        if act == "choose_option":
+            resolver_id = value.get("resolver_id", "")
+            choice = value.get("choice", "")
+            logger.info(
+                "[Feishu WS] conflict choice received: resolver_id=%s choice=%s operator=%s",
+                resolver_id, choice, operator,
+            )
+            threading.Thread(
+                target=_run_conflict_choice_async, args=(resolver_id, choice), daemon=True
+            ).start()
+            return P2CardActionTriggerResponse({
+                "toast": {"type": "success",
+                          "content": "已收到选择（方案 %s），正在进入执行审批..." % choice},
+            })
+
         entry = approval_manager.get_pending(approval_id)
         if entry is None:
             return P2CardActionTriggerResponse({
@@ -637,6 +677,41 @@ def _run_approved_async(approval_id):
         logger.error("[Feishu WS] approved action failed: %s", e, exc_info=True)
 
 
+def _run_conflict_choice_async(resolver_id, choice):
+    """后台线程: 用户在决策看板点选方案后, 走仲裁执行链路。
+    执行器会创建新的审批单, 这里负责把执行审批卡片推回会话。"""
+    from app.optimizer.conflict_resolver import get_conflict_resolver
+    try:
+        result = get_conflict_resolver().apply_choice(resolver_id, choice)
+        if not isinstance(result, dict):
+            return
+        if result.get("type") == "approval_required":
+            data = result.get("data", {})
+            # conversation_id 存于审批条目中 (verifier 创建审批时写入)
+            conversation_id = ""
+            try:
+                from app.utils.approval import approval_manager
+                entry = approval_manager.get_pending(data.get("approval_id", ""))
+                if entry:
+                    conversation_id = entry.get("conversation_id", "")
+            except Exception:
+                pass
+            try:
+                card_json = _build_approval_card(data)
+                if conversation_id:
+                    feishu_tool.send_message(conversation_id, card_json, msg_type="interactive")
+                    logger.info(
+                        "[Feishu WS] conflict->approval card sent: resolver=%s approval=%s",
+                        resolver_id, data.get("approval_id"),
+                    )
+            except Exception as e:
+                logger.error("[Feishu WS] conflict->approval card failed: %s", e)
+        elif result.get("type") == "error":
+            logger.warning("[Feishu WS] conflict choice failed: %s", result.get("data"))
+    except Exception as e:
+        logger.error("[Feishu WS] conflict choice error: %s", e, exc_info=True)
+
+
 def start_feishu_ws(app_id: str, app_secret: str):
     """启动飞书 WebSocket 客户端（官方SDK版本）"""
     if not app_id or not app_secret:
@@ -678,10 +753,11 @@ def start_feishu_ws(app_id: str, app_secret: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 3:
-        app_id = sys.argv[1]
-        app_secret = sys.argv[2]
+    # 凭据从环境变量读取 (父进程经 env 传递), 避免通过 argv 暴露密钥给本机进程列表
+    app_id = os.getenv("FEISHU_APP_ID", "")
+    app_secret = os.getenv("FEISHU_APP_SECRET", "")
+    if app_id and app_secret:
         start_feishu_ws(app_id, app_secret)
     else:
-        logger.error("[Feishu WS] Missing app_id or app_secret arguments")
+        logger.error("[Feishu WS] Missing FEISHU_APP_ID/FEISHU_APP_SECRET in environment")
         sys.exit(1)

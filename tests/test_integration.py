@@ -60,14 +60,16 @@ class TestSkillRegistryCompleteness:
         names = [t.name for t in tools]
         for s in self.EXPECTED:
             assert s in names, f"router missing: {s}"
-        assert len(names) == 12
+        # L4: +pricing_skill 共 13 个
+        assert len(names) == 13
 
     def test_registry(self):
         from app.agent.workflow import SKILL_REGISTRY
         for s in self.EXPECTED:
             assert s in SKILL_REGISTRY
             assert callable(SKILL_REGISTRY[s])
-        assert len(SKILL_REGISTRY) == 12
+        # L4: +pricing_skill 共 13 个
+        assert len(SKILL_REGISTRY) == 13
 
     def test_sync(self):
         from app.agent.router import tools
@@ -143,7 +145,8 @@ class TestRouterToolBinding:
         ml = MagicMock()
         ml.bind_tools.return_value = MagicMock()
         ml.bind_tools(tools)
-        assert len(ml.bind_tools.call_args[0][0]) == 12
+        # L4: +pricing_skill 共 13 个
+        assert len(ml.bind_tools.call_args[0][0]) == 13
 
     def test_router_uses_llm(self):
         ml, ml_t = _mk_llm()

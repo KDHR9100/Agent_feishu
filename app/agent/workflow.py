@@ -260,6 +260,16 @@ def _run_data_analysis_skill(user_input, file_path, file_content, tool_result):
     return data_analysis_skill(user_input)
 
 
+def _run_pricing_skill(user_input, file_path, file_content, tool_result):
+    # L4 新增技能: 损益优化沙盒定价 (is_executable, 走 executor 审批闭环)
+    from app.skills.pricing_skill import pricing_skill
+    return pricing_skill(user_input)
+
+
+# L4: 可执行技能集合 — skill_executor 对这些技能产出的 execution_request 走 executor 审批闭环
+EXECUTABLE_SKILLS = {"pricing_skill"}
+
+
 SKILL_REGISTRY = {
     "product_skill": _run_product_skill,
     "ads_skill": _run_ads_skill,
@@ -273,6 +283,7 @@ SKILL_REGISTRY = {
     "seo_skill": _run_seo_skill,
     "support_skill": _run_support_skill,
     "data_analysis_skill": _run_data_analysis_skill,
+    "pricing_skill": _run_pricing_skill,
 }
 
 
@@ -372,6 +383,37 @@ def _accumulate_token_usage(state, delta):
 def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_result, state):
     """执行单个技能, 返回结果"""
     skill_start = time.time()
+    # L4 旁路增强: 可执行技能 (is_executable) 先经沙盒计算, 再走 executor 审批闭环,
+    # 绝不直接输出文本了事; 审批链路复用 ApprovalManager, 与既有技能注册机制互不干扰。
+    if skill_name in EXECUTABLE_SKILLS and skill_name in SKILL_REGISTRY:
+        with track_as(skill_name, state.get("conversation_id", "")):
+            try:
+                result = SKILL_REGISTRY[skill_name](
+                    user_input, file_path, file_content, tool_result
+                )
+                monitoring_stats.record_skill_call(skill_name, time.time() - skill_start)
+            except Exception as e:
+                logger.error(
+                    "[skill_executor] executable skill=%s error: %s" % (skill_name, e),
+                    exc_info=True,
+                )
+                return {"type": "error", "data": "技能 %s 执行出错, 请稍后重试。" % skill_name}
+        if isinstance(result, dict) and result.get("is_executable") and result.get("execution_request"):
+            from app.executor.action_verifier import get_action_verifier
+            verify_result = get_action_verifier().verify_and_execute(
+                result["execution_request"],
+                conversation_id=state.get("conversation_id", ""),
+                skill_name=skill_name,
+                user_input=user_input,
+            )
+            # 把沙盒建议文本附在审批提示前, 用户先看数据再点审批
+            if isinstance(verify_result, dict) and verify_result.get("type") == "approval_required":
+                analysis_text = _extract_text_from_result(result)
+                verify_result["data"]["response"] = (
+                    analysis_text + "\n\n" + verify_result["data"]["response"]
+                )
+            return verify_result
+        return result
     # 高危操作审批门（APPROVAL_ENABLED=true 时生效）：非阻塞设计。
     # 创建审批单后立即返回待审批结果, 由飞书端发送审批卡片,
     # 用户点击卡片按钮 (card.action.trigger 回调) 后才真正执行。
@@ -510,6 +552,28 @@ def skill_executor(state):
         "total_tokens": 0,
     }
     results = []
+
+    # L4 任务12 旁路仲裁: 用户请求含超过 2 个相互冲突的指标时, 不直接执行技能,
+    # 交由冲突仲裁器算帕累托前沿并出决策看板供用户点选 (最终权衡交给人类)。
+    _raw_input = tool_result.get("user_input", "")
+    if _raw_input:
+        from app.optimizer.conflict_resolver import (
+            detect_conflicts,
+            get_conflict_resolver,
+            is_conflicted,
+        )
+        if is_conflicted(detect_conflicts(_raw_input)):
+            decision = get_conflict_resolver().resolve(
+                _raw_input, conversation_id=state.get("conversation_id", ""))
+            logger.warning(
+                "[skill_executor] conflict detected (%d goals), routed to resolver session=%s"
+                % (len(decision["data"]["goals"]), decision["data"]["resolver_id"])
+            )
+            state["skill_results"] = [
+                {"skill": "conflict_resolver", "result": decision}
+            ]
+            state["tool_result"] = decision
+            return state
 
     # ===== Plan-Execute 模式: 顺序流水线 + 依赖传递 =====
     if execution_plan:

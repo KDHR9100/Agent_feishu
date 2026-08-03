@@ -27,6 +27,14 @@ class DocumentManager:
     def __init__(self):
         os.makedirs(self.DOCS_DIR, exist_ok=True)
 
+    def _safe_path(self, name):
+        """防止路径穿越: 解析后的真实路径必须位于 DOCS_DIR 内"""
+        base_dir = os.path.realpath(self.DOCS_DIR)
+        full_path = os.path.realpath(os.path.join(self.DOCS_DIR, name))
+        if full_path != base_dir and not full_path.startswith(base_dir + os.sep):
+            raise ValueError("Path traversal blocked: %s" % name)
+        return full_path
+
     def list_documents(self):
         """List all documents with metadata."""
         docs = []
@@ -48,7 +56,7 @@ class DocumentManager:
 
     def read_document(self, name):
         """Read document content by name."""
-        path = os.path.join(self.DOCS_DIR, name)
+        path = self._safe_path(name)
         if not os.path.exists(path):
             return None
         with open(path, "r", encoding="utf-8") as f:
@@ -56,7 +64,7 @@ class DocumentManager:
 
     def add_document(self, name, content):
         """Add or overwrite a document."""
-        path = os.path.join(self.DOCS_DIR, name)
+        path = self._safe_path(name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -65,7 +73,7 @@ class DocumentManager:
 
     def delete_document(self, name):
         """Delete a document by name."""
-        path = os.path.join(self.DOCS_DIR, name)
+        path = self._safe_path(name)
         if os.path.exists(path):
             os.remove(path)
             logger.info("Document deleted: %s", name)

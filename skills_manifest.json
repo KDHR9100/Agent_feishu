@@ -159,6 +159,22 @@
       ],
       "module": "app.skills.help_skill",
       "function": "help_skill"
+    },
+    {
+      "name": "pricing_skill",
+      "description": "L4 损益优化沙盒智能定价：活动定价、调价建议，用蒙特卡洛模拟给出最优价格、ROI 提升幅度与置信区间。不处理竞品情报收集（属于 competitor_skill）。",
+      "keywords": [
+        "定价",
+        "怎么定价",
+        "活动价",
+        "调价",
+        "中秋活动价",
+        "双11价",
+        "卖多少钱",
+        "定个价"
+      ],
+      "module": "app.skills.pricing_skill",
+      "function": "pricing_skill"
     }
   ]
 }

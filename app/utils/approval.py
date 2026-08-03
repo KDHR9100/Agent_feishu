@@ -152,10 +152,24 @@ REQUIRES_APPROVAL_SKILLS = set()
 HIGH_RISK_KEYWORDS = [
     "降价", "减价", "调价", "改价", "打折", "折扣",
     "下架", "删除商品", "清仓", "停售",
+    # L4 补充: 涨价/发券方向同样属于高风险动作
+    "调高", "涨价", "提价", "发券",
 ]
 
 # 审批门总开关（默认关闭）；设为 true 时高危动作执行前需人工批准
 APPROVAL_ENABLED = os.getenv("APPROVAL_ENABLED", "false").lower() == "true"
+
+# 审批操作者白名单 (飞书 open_id, 逗号分隔): 仅名单内用户可以批准/拒绝/点选决策方案
+APPROVAL_OPERATORS = {
+    o.strip()
+    for o in os.getenv("APPROVAL_OPERATORS", "").split(",")
+    if o.strip()
+}
+
+
+def is_authorized_approver(open_id: str) -> bool:
+    """判断操作者是否具备审批权限; 未配置白名单时默认拒绝 (fail-closed)"""
+    return bool(APPROVAL_OPERATORS) and open_id in APPROVAL_OPERATORS
 
 
 def should_gate(skill_name: str, user_input: str = "") -> bool:

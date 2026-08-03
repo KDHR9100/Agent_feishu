@@ -1,4 +1,5 @@
 """WebSocket process manager with health check and auto-restart"""
+import os
 import subprocess
 import sys
 import threading
@@ -45,14 +46,17 @@ class WebSocketProcessManager:
     def _spawn_process(self):
         """启动 WebSocket 子进程"""
         try:
+            # 凭据经环境变量传递给子进程, 避免出现在 argv 中被本机其他用户通过进程列表读取
+            child_env = os.environ.copy()
+            child_env["FEISHU_APP_ID"] = self._app_id or ""
+            child_env["FEISHU_APP_SECRET"] = self._app_secret or ""
             self._process = subprocess.Popen(
                 [
                     sys.executable,
                     "-m",
                     "app.tools.feishu_ws",
-                    self._app_id,
-                    self._app_secret,
                 ],
+                env=child_env,
                 stdout=None,
                 stderr=None,
                 text=True,

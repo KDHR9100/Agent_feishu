@@ -36,6 +36,18 @@ SQLAlchemy>=2.0
 
 # Networking
 requests>=2.28
+httpx>=0.24
+parsel>=1.8
+
+# L4 Optimization & Crawler (优化决策层 & 市场哨兵)
+numpy>=1.24
+scipy>=1.10
+optuna>=3.5
+# curl_cffi 为可选依赖(浏览器指纹伪装), 代码内 try-import 自动降级到 httpx
+curl_cffi>=0.6
+
+# Event Bus (可选, 默认使用内存实现; 多实例部署时启用)
+# redis>=5.0
 
 # Scheduling
 APScheduler>=3.10

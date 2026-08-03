@@ -138,7 +138,7 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 技能清单以 skills_manifest.json 为唯一数据源（name/description/keywords/module/function）。registry 每次路由前检测 manifest 文件 mtime，变化则重载并递增 version；router 按 version 刷新工具列表、关键词规则与 bind_tools 缓存。新增/修改技能无需重启服务即可生效。
 ---
 
-## 4. 技能列表（12 个）
+## 4. 技能列表（13 个）
 
 | # | 技能名 | 功能 | 触发关键词 | 实现方式 |
 |---|--------|------|-----------|---------|
@@ -154,6 +154,7 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 | 10 | data_analysis_skill | 深度数据分析、趋势、异常检测 | 趋势、异常、同比、环比、统计 | DB 查询 + 基础统计 + LLM 专业分析 |
 | 11 | file_analysis_skill | 文件解析分析报告 | 解析文件、分析文件、这个表格、这份数据 | 已解析 file_content + LLM 结构化报告 |
 | 12 | help_skill | 使用帮助、功能介绍 | 帮助、你能做什么、功能、怎么用 | HELP_PROMPT + LLM |
+| 13 | pricing_skill | L4 智能定价：活动定价/调价建议，蒙特卡洛模拟给出最优价、ROI 提升与置信区间 | 定价、活动价、调价、双11价、卖多少钱 | profit_model + solver_engine 蒙特卡洛模拟 |
 
 库存预警阈值（按品类）：electronics: 50, clothing: 100, food: 100, beauty: 200, 默认: 100
 
@@ -362,7 +363,20 @@ Agent_feishu/
 │   │   ├── doc_manager.py        # 文档 CRUD + SHA-256 变更检测 + 查询缓存
 │   │   └── eval/
 │   │       └── evaluate_rag.py   # 20 题关键词召回率评估
-│   ├── skills/                   # 12 个业务技能
+│   ├── skills/                   # 13 个业务技能
+│   ├── optimizer/                # L4 损益优化层（定价模型/求解器/冲突仲裁）
+│   │   ├── profit_model.py       # 利润/需求弹性模型
+│   │   ├── solver_engine.py      # 蒙特卡洛/约束求解引擎
+│   │   ├── conflict_resolver.py  # 多目标冲突检测与仲裁
+│   │   └── api.py                # 优化层 HTTP 路由
+│   ├── sentinel/                 # L4 市场哨兵（竞品监控/触发引擎）
+│   │   ├── crawler_base.py       # 爬虫基类（curl_cffi 指纹伪装降级 httpx）
+│   │   ├── trigger_engine.py     # 价格/差评触发引擎
+│   │   └── event_bus.py          # 事件总线（内存/redis 可选）
+│   ├── executor/                 # L4 动作执行层（审批门 + 回滚）
+│   │   ├── action_verifier.py    # 高危动作校验与审批门
+│   │   ├── platform_adapter.py   # 店铺平台适配器（mock/真实）
+│   │   └── rollback_manager.py   # 动作回滚管理
 │   ├── tasks/
 │   │   └── scheduler.py          # APScheduler 定时任务
 │   ├── tools/
@@ -501,9 +515,15 @@ docker compose down
 | GET | /metrics/usage | 分技能 Token 消耗统计（近 24h 排行） |
 | GET | /health/jingang | 金刚消耗监控 |
 | POST | /approval/{approval_id}/resolve | 审批单批准/拒绝（?approved=true/false） |
+| POST | /optimize/pricing | L4 智能定价（蒙特卡洛模拟） |
+| POST | /optimize/resolve-conflict | L4 多目标冲突检测与仲裁 |
+| POST | /optimize/choose-option | L4 决策看板点选（方案 A/B） |
+| POST | /sentinel/check | L4 市场哨兵触发检查 |
+| POST | /executor/confirm/{action_id} | L4 执行器确认动作 |
+| GET | /executor/status/{action_id} | L4 执行器动作状态查询 |
 | POST | /feishu/webhook | 飞书 Webhook |
 
-> /chat、/rag/query、/approval 等写接口支持 X-API-Key 鉴权（环境变量 API_KEY 配置，留空关闭）。
+> /chat、/rag/query、/approval 等写接口受 X-API-Key 鉴权保护（环境变量 API_KEY 配置）。**默认拒绝（fail-closed）**：未配置 API_KEY 时这些接口返回 503，配置后需携带匹配的 `X-API-Key` 请求头，避免服务在未鉴权状态下暴露。
 
 ---
 
@@ -650,8 +670,10 @@ GitHub Actions（.github/workflows/ci.yml）：
 | Router LLM | ROUTER_API_KEY/BASE/MODEL_NAME | 复用 LLM_* | 路由专用模型（可指向更快模型） |
 | VLM | VLM_API_KEY/BASE/MODEL_NAME | 复用 LLM_* | 多模态视觉模型 |
 | LLM 供应商 | LLM_PROVIDER | 自动检测 | DashScope/OpenAI |
-| API 鉴权 | API_KEY | "" | HTTP 接口 X-API-Key，留空关闭鉴权 |
+| API 鉴权 | API_KEY | "" | HTTP 接口 X-API-Key，**必填**；未配置时受保护端点默认拒绝（fail-closed） |
 | 审批门 | APPROVAL_ENABLED | false | 高危操作（降价/打折等）飞书审批开关 |
+| 审批操作者白名单 | APPROVAL_OPERATORS | "" | 飞书 open_id 逗号分隔；启用审批门时必填，仅名单内用户可批准/拒绝/点选决策 |
+| 真实执行模式 | EXECUTOR_REAL_MODE | false | true 时执行器对接真实店铺平台（当前适配器为预留实现） |
 
 ---
 

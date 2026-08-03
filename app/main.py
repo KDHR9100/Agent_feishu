@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
+import hmac
 import time
 import os
 
@@ -16,12 +17,18 @@ app = FastAPI(title="Ecommerce Agent", version="1.0.0")
 
 # API 鉴权: 当设置了 API_KEY 环境变量时, 敏感端点要求携带匹配的 X-API-Key 请求头
 _API_KEY = os.getenv("API_KEY", "")
+if not _API_KEY:
+    logger.warning(
+        "API_KEY is not configured: protected endpoints now reject all requests (fail-closed). "
+        "Set the API_KEY environment variable to enable them."
+    )
 
 
 async def require_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    # fail-closed: 未配置 API_KEY 时受保护端点默认拒绝, 避免服务在未鉴权状态下暴露
     if not _API_KEY:
-        return None
-    if x_api_key != _API_KEY:
+        raise HTTPException(status_code=503, detail="API_KEY not configured on server")
+    if not hmac.compare_digest(x_api_key or "", _API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
     return None
 
@@ -58,6 +65,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
+
+
+# ---------- L4 旁路增强: 优化器 HTTP 路由 (POST /optimize/pricing 等) ----------
+from app.optimizer.api import router as optimizer_router  # noqa: E402
+
+app.include_router(optimizer_router)
 
 
 class ChatRequest(BaseModel):
@@ -246,6 +259,39 @@ async def startup_event():
     except Exception as e:
         logger.error("Failed to start TaskScheduler: %s" % str(e), exc_info=True)
 
+    # ---------- L4 旁路子系统初始化 (不改动既有 12 技能注册) ----------
+    try:
+        from app.config import SENTINEL_CONFIG
+        from app.sentinel.trigger_engine import sentinel
+        if SENTINEL_CONFIG["enabled"]:
+            sentinel.start()
+            logger.info(
+                "L4 market sentinel started (interval=%d min)",
+                SENTINEL_CONFIG["poll_interval_minutes"],
+            )
+        else:
+            logger.info("L4 market sentinel disabled (SENTINEL_ENABLED=false)")
+    except Exception as e:
+        logger.error("Failed to start L4 sentinel: %s" % str(e), exc_info=True)
+
+    try:
+        from app.executor.rollback_manager import get_rollback_manager
+        get_rollback_manager().start()
+        logger.info("L4 rollback sweeper started (confirm window=1h)")
+    except Exception as e:
+        logger.error("Failed to start L4 rollback sweeper: %s" % str(e), exc_info=True)
+
+    try:
+        from app.config import EXECUTOR_REAL_MODE
+        from app.executor.platform_adapter import get_store_api
+        _store_api = get_store_api()
+        logger.info(
+            "L4 store adapter ready: platform=%s real_mode=%s",
+            _store_api.platform, EXECUTOR_REAL_MODE,
+        )
+    except Exception as e:
+        logger.error("Failed to init L4 store adapter: %s" % str(e), exc_info=True)
+
     logger.info("=" * 60)
     logger.info("Ecommerce Agent Service Started Successfully")
     logger.info("Service will be available at: http://localhost:%s" % config.APP_PORT)
@@ -266,6 +312,21 @@ async def shutdown_event():
         logger.info("TaskScheduler stopped")
     except Exception as e:
         logger.error("Failed to stop TaskScheduler: %s" % str(e), exc_info=True)
+
+    # ---------- L4 旁路子系统停机 ----------
+    try:
+        from app.sentinel.trigger_engine import sentinel
+        sentinel.stop()
+        logger.info("L4 market sentinel stopped")
+    except Exception as e:
+        logger.error("Failed to stop L4 sentinel: %s" % str(e), exc_info=True)
+
+    try:
+        from app.executor.rollback_manager import get_rollback_manager
+        get_rollback_manager().shutdown()
+        logger.info("L4 rollback sweeper stopped")
+    except Exception as e:
+        logger.error("Failed to stop L4 rollback sweeper: %s" % str(e), exc_info=True)
 
     try:
         from app.tools.ws_manager import ws_manager
@@ -374,3 +435,67 @@ async def resolve_approval(approval_id: str, approved: bool, _: None = Depends(r
             daemon=True,
         ).start()
     return {"approval_id": approval_id, "approved": approved, "resolved": True}
+
+
+# ============================================================
+# L4 旁路增强: 仲裁 / 哨兵 / 执行确认 测试端点
+# ============================================================
+
+class ConflictResolveRequest(BaseModel):
+    user_input: str
+    conversation_id: Optional[str] = ""
+    context: Optional[dict] = None
+
+
+@app.post("/optimize/resolve-conflict")
+async def resolve_conflict_endpoint(req: ConflictResolveRequest, _: None = Depends(require_api_key)):
+    """任务12 仲裁入口: 识别冲突目标并生成帕累托决策看板 (A/B 方案)"""
+    from app.optimizer.conflict_resolver import get_conflict_resolver
+    return get_conflict_resolver().resolve(
+        req.user_input, ctx=req.context, conversation_id=req.conversation_id or "")
+
+
+class ConflictChoiceRequest(BaseModel):
+    resolver_id: str
+    choice: str
+    conversation_id: Optional[str] = ""
+
+
+@app.post("/optimize/choose-option")
+async def choose_option_endpoint(req: ConflictChoiceRequest, _: None = Depends(require_api_key)):
+    """任务12 仲裁点选: 用户选定方案后走 executor 审批闭环"""
+    from app.optimizer.conflict_resolver import get_conflict_resolver
+    return get_conflict_resolver().apply_choice(
+        req.resolver_id, req.choice, req.conversation_id or "")
+
+
+@app.post("/sentinel/check")
+async def sentinel_check_endpoint(_: None = Depends(require_api_key)):
+    """任务9 哨兵手动触发一次巡检 (Checkpoint1 联调用)"""
+    from app.sentinel.event_bus import event_bus
+    from app.sentinel.trigger_engine import sentinel
+    alerts = sentinel.check_once()
+    return {
+        "status": "ok",
+        "alerts": alerts,
+        "sentinel_status": sentinel.get_status(),
+        "recent_events": event_bus.get_history()[-10:],
+    }
+
+
+@app.post("/executor/confirm/{action_id}")
+async def confirm_action_endpoint(action_id: str, _: None = Depends(require_api_key)):
+    """任务11 人工确认执行完成: 确认后不再自动回滚"""
+    from app.executor.rollback_manager import get_rollback_manager
+    ok = get_rollback_manager().confirm(action_id)
+    return {"action_id": action_id, "confirmed": ok}
+
+
+@app.get("/executor/status/{action_id}")
+async def action_status_endpoint(action_id: str, _: None = Depends(require_api_key)):
+    """任务11 查询动作状态 (awaiting_confirmation/confirmed/rolled_back)"""
+    from app.executor.rollback_manager import get_rollback_manager
+    entry = get_rollback_manager().get(action_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="action not found")
+    return {"action_id": action_id, "entry": entry}

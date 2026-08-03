@@ -144,6 +144,45 @@ class Config:
 
 config = Config()
 
+# ============================================================
+# L4 优化器参数 (损益目标函数调参入口, 按商品类目调整)
+# ============================================================
+OPTIMIZER_CONFIG = {
+    # ---- 价格弹性模型: 销量 = base_sales * (1 + elastic * (竞品价 - 自己的价)/竞品价) ----
+    "price_elasticity": float(os.getenv("OPT_PRICE_ELASTICITY", "1.5")),
+    "base_sales": float(os.getenv("OPT_BASE_SALES", "200")),          # 基准销量(件/周期)
+    "unit_cost": float(os.getenv("OPT_UNIT_COST", "40")),             # 单件成本
+    # ---- 成本结构 ----
+    "storage_fee_rate": float(os.getenv("OPT_STORAGE_FEE_RATE", "0.5")),   # 仓储费率(元/件/周期)
+    "rush_fee_per_unit": float(os.getenv("OPT_RUSH_FEE", "15")),           # 库存不足时的加急费(元/件)
+    "ad_effectiveness": float(os.getenv("OPT_AD_EFFECTIVENESS", "0.35")),  # 广告投放对销量的提升系数(边际递减)
+    # ---- 蒙特卡洛模拟 ----
+    "mc_simulations": int(os.getenv("OPT_MC_SIMS", "1000")),          # 每个候选方案的模拟次数
+    "demand_noise_std": float(os.getenv("OPT_DEMAND_NOISE", "0.10")),      # 需求扰动标准差
+    "competitor_price_noise_std": float(os.getenv("OPT_COMP_NOISE", "0.03")),  # 竞品价扰动标准差
+    # ---- 默认经营上下文 (技能未提供具体数据时的兜底) ----
+    "default_price": float(os.getenv("OPT_DEFAULT_PRICE", "99")),
+    "default_competitor_price": float(os.getenv("OPT_DEFAULT_COMP_PRICE", "105")),
+    "default_inventory": float(os.getenv("OPT_DEFAULT_INVENTORY", "300")),
+    "default_ad_budget": float(os.getenv("OPT_DEFAULT_AD_BUDGET", "800")),
+}
+
+# ============================================================
+# L4 市场哨兵参数 (主动感知层)
+# ============================================================
+SENTINEL_CONFIG = {
+    "poll_interval_minutes": int(os.getenv("SENTINEL_POLL_MINUTES", "30")),
+    "price_change_threshold": float(os.getenv("SENTINEL_PRICE_THRESHOLD", "0.03")),    # 竞品价格波动阈值 3%
+    "negative_review_threshold": float(os.getenv("SENTINEL_NEG_THRESHOLD", "0.05")),   # 差评率突增阈值 5%(绝对值)
+    "top_n": int(os.getenv("SENTINEL_TOP_N", "10")),
+    "enabled": os.getenv("SENTINEL_ENABLED", "true").lower() == "true",
+}
+
+# ============================================================
+# L4 执行层安全开关: 默认 Mock, 显式设置 EXECUTOR_REAL_MODE=true 才允许真实店铺操作
+# ============================================================
+EXECUTOR_REAL_MODE = os.getenv("EXECUTOR_REAL_MODE", "false").lower() == "true"
+
 _llm_instance = None
 _router_llm_instance = None
 
