@@ -156,3 +156,7 @@ Address the customer's concern directly and provide specific solutions.
 def support_skill(user_input: str) -> Dict[str, Any]:
     skill = SupportSkill()
     return skill.handle_support(user_input)
+
+
+# 高风险操作标记: 涉及退款/改价需要人工审批
+requires_approval = True

@@ -69,7 +69,7 @@ def inventory_skill(user_input: str) -> Dict[str, Any]:
         return {
             "type": "inventory_report",
             "data": {
-                "user_input": user_input,
+                "user_input": (user_input or "")[:200],
                 "total_items": len(all_products),
                 "low_inventory_count": len(low_inventory_items),
                 "low_inventory_items": low_inventory_items,
@@ -80,10 +80,14 @@ def inventory_skill(user_input: str) -> Dict[str, Any]:
         return {
             "type": "inventory_report",
             "data": {
-                "user_input": user_input,
+                "user_input": (user_input or "")[:200],
                 "total_items": 0,
                 "low_inventory_count": 0,
                 "low_inventory_items": [],
                 "error": str(e),
             },
         }
+
+
+# 高风险操作标记: 涉及库存修改需要人工审批
+requires_approval = True

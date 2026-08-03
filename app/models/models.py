@@ -1,4 +1,4 @@
-﻿from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON
 from datetime import datetime
 from .database import Base
 
@@ -80,3 +80,19 @@ class UserProfile(Base):
 
     def __repr__(self):
         return f"<UserProfile(user_id={self.user_id}, user_name={self.user_name}, role={self.role})>"
+
+
+class TokenUsageLog(Base):
+    """Token 消耗日志表 - 记录每次技能调用的 token 用量"""
+    __tablename__ = "token_usage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    skill_name = Column(String(100), index=True, nullable=False)
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    total_tokens = Column(Integer, default=0)
+    conversation_id = Column(String(100), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    def __repr__(self):
+        return f"<TokenUsageLog(skill={self.skill_name}, total={self.total_tokens})>"

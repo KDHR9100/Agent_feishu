@@ -8,6 +8,8 @@
 
 import os
 import time
+import math
+from datetime import datetime
 
 from app.config import logger
 
@@ -15,6 +17,7 @@ from app.config import logger
 HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.6"))  # 向量搜索权重 (0.6 偏向向量)
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "5"))  # 最终输出数量
 RERANK_MODEL_NAME = os.getenv("RERANK_MODEL_NAME", "BAAI/bge-reranker-base")
+TIME_DECAY_LAMBDA = float(os.getenv("TIME_DECAY_LAMBDA", "0.01"))  # 时间衰减系数
 
 
 def _find_cached_model_path(model_name):
@@ -134,6 +137,9 @@ class HybridSearcher:
             # RRF 融合
             results = self._rrf_merge(bm25_results, vector_results)
 
+        # 时间衰减
+        results = self._apply_time_decay(results)
+
         # Rerank 精排
         if use_rerank and self._rerank_available and results:
             rerank_start = time.time()
@@ -241,6 +247,27 @@ class HybridSearcher:
         merged.sort(key=lambda x: x["score"], reverse=True)
 
         return merged
+
+    def _apply_time_decay(self, results: list) -> list:
+        """应用时间衰减: final_score = rrf_score * exp(-lambda * days_ago)"""
+        now = datetime.utcnow()
+        for item in results:
+            source = item.get("source", "")
+            last_updated = item.get("last_updated")
+            if last_updated:
+                try:
+                    if isinstance(last_updated, str):
+                        updated_dt = datetime.fromisoformat(last_updated)
+                    else:
+                        updated_dt = last_updated
+                    days_ago = (now - updated_dt).total_seconds() / 86400.0
+                    decay = math.exp(-TIME_DECAY_LAMBDA * max(days_ago, 0))
+                    item["score"] = item["score"] * decay
+                    item["time_decay"] = round(decay, 4)
+                except Exception:
+                    pass  # 无法解析时间则不衰减
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results
 
     def _rerank(self, query: str, candidates: list, top_k: int = 5) -> list:
         """

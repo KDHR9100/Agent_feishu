@@ -1,6 +1,13 @@
 import os
+import base64
+import logging
 import pandas as pd
 from typing import Dict, Any
+
+logger = logging.getLogger("file_parser")
+
+# 支持的图片扩展名
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 
 
 class FileParserTool:
@@ -9,14 +16,17 @@ class FileParserTool:
             return {'error': f'File not found: {file_path}'}
         try:
             _, ext = os.path.splitext(file_path)
-            if ext.lower() in ['.xlsx', '.xls']:
+            ext_lower = ext.lower()
+            if ext_lower in ['.xlsx', '.xls']:
                 df = pd.read_excel(file_path)
-            elif ext.lower() == '.csv':
+            elif ext_lower == '.csv':
                 df = pd.read_csv(file_path)
-            elif ext.lower() == '.pdf':
+            elif ext_lower == '.pdf':
                 return self._parse_pdf(file_path)
-            elif ext.lower() == '.docx':
+            elif ext_lower == '.docx':
                 return self._parse_word(file_path)
+            elif ext_lower in IMAGE_EXTENSIONS:
+                return self.parse_image(file_path)
             else:
                 return {'error': f'Unsupported file type: {ext}'}
             columns = list(df.columns)
@@ -48,6 +58,78 @@ class FileParserTool:
             }
         except Exception as e:
             return {'error': f'Failed to parse file: {str(e)}'}
+
+    def parse_image(self, file_path: str) -> Dict[str, Any]:
+        """调用 VLM 解析图片, 提取表格数据/关键数值/促销文字"""
+        from app.config import config
+
+        if not config.VLM_API_KEY:
+            return {'error': 'VLM_API_KEY not configured, cannot parse image'}
+
+        try:
+            # 读取图片并转为 base64
+            with open(file_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+
+            _, ext = os.path.splitext(file_path)
+            mime_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                        '.png': 'image/png', '.webp': 'image/webp'}
+            mime_type = mime_map.get(ext.lower(), 'image/png')
+            image_url = f"data:{mime_type};base64,{image_data}"
+
+            # 通过 OpenAI 兼容接口调用 VLM
+            from openai import OpenAI
+            client = OpenAI(
+                api_key=config.VLM_API_KEY,
+                base_url=config.VLM_API_BASE,
+            )
+
+            prompt = (
+                "请分析这张图片，提取其中的关键信息。要求：\n"
+                "1. 如果包含表格数据，转为 Markdown 表格格式\n"
+                "2. 如果包含数值/价格/百分比，列出关键数值\n"
+                "3. 如果包含促销文字/广告语，提取文案内容\n"
+                "4. 用中文输出，格式清晰\n"
+                "5. 如果图片内容与电商无关，简要描述图片内容"
+            )
+
+            response = client.chat.completions.create(
+                model=config.VLM_MODEL_NAME,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                        ],
+                    }
+                ],
+                max_tokens=2000,
+            )
+
+            content = response.choices[0].message.content or ""
+            logger.info(
+                "[parse_image] VLM response len=%d, model=%s"
+                % (len(content), config.VLM_MODEL_NAME)
+            )
+
+            return {
+                'columns': ['image_content'],
+                'row_count': 1,
+                'summary': {
+                    'image_content': {
+                        'type': 'image_analysis',
+                        'model': config.VLM_MODEL_NAME,
+                        'file_size': os.path.getsize(file_path),
+                    }
+                },
+                'sample_rows': [{'content': content}],
+                'file_path': file_path,
+                'image_analysis': content,
+            }
+        except Exception as e:
+            logger.error("[parse_image] error: %s" % str(e), exc_info=True)
+            return {'error': f'Image parsing failed: {str(e)}'}
 
     def _parse_pdf(self, file_path: str) -> Dict[str, Any]:
         try:
@@ -118,6 +200,11 @@ class FileParserTool:
         """将解析结果格式化为摘要文本，供多个调用方复用"""
         if parse_result.get("error"):
             return ""
+
+        # 图片解析结果特殊处理
+        if parse_result.get("image_analysis"):
+            return f"文件信息: {file_name}\n图片解析结果:\n{parse_result['image_analysis']}"
+
         summary = parse_result.get("summary", {})
         columns = parse_result.get("columns", [])
         row_count = parse_result.get("row_count", 0)

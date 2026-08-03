@@ -3,112 +3,66 @@ import time
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.config import get_llm
+from app.config import get_router_llm
 from app.prompts import ROUTER_PROMPT
 from app.utils.timeout import timeout, TimeoutException
+from app.mcp_server import skill_registry
+from app.utils.security import detect_injection, SAFE_BLOCK_RESPONSE, wrap_untrusted
 
 logger = logging.getLogger("router")
 
 
-def product_skill(user_input: str) -> dict:
-    """分析商品销售数据、库存、SKU表现等"""
-    return {"skill": "product_skill", "user_input": user_input}
+# ============================================================
+# 动态工具定义: 从 skill_registry 生成 StructuredTool 列表
+# ============================================================
+def _build_tool_func(skill_name: str, description: str):
+    """为每个技能动态生成 tool function"""
+    def tool_func(user_input: str) -> dict:
+        return {"skill": skill_name, "user_input": user_input}
+    tool_func.__name__ = skill_name
+    tool_func.__doc__ = description
+    return tool_func
 
-def ads_skill(user_input: str) -> dict:
-    """分析广告投放效果、ROI、花费等"""
-    return {"skill": "ads_skill", "user_input": user_input}
 
-def content_skill(user_input: str) -> dict:
-    """生成营销文案、商品描述、推广内容等"""
-    return {"skill": "content_skill", "user_input": user_input}
+def _build_tools():
+    """从 manifest 动态构建 StructuredTool 列表"""
+    tool_list = []
+    for skill_info in skill_registry.list_tools():
+        func = _build_tool_func(skill_info["name"], skill_info["description"])
+        tool_list.append(StructuredTool.from_function(func))
+    logger.info("[router] built %d tools from manifest", len(tool_list))
+    return tool_list
 
-def help_skill(user_input: str) -> dict:
-    """提供使用帮助和功能导航"""
-    return {"skill": "help_skill", "user_input": user_input}
 
-def file_analysis_skill(user_input: str) -> dict:
-    """解析上传的文件数据(xlsx/csv/pdf/docx)"""
-    return {"skill": "file_analysis_skill", "user_input": user_input}
-
-def inventory_skill(user_input: str) -> dict:
-    """分析库存数据、库存预警、补货建议等"""
-    return {"skill": "inventory_skill", "user_input": user_input}
-
-def competitor_skill(user_input: str) -> dict:
-    """分析竞品数据、市场竞争情报等"""
-    return {"skill": "competitor_skill", "user_input": user_input}
-
-def report_skill(user_input: str) -> dict:
-    """生成运营报告、数据报告、分析报告等"""
-    return {"skill": "report_skill", "user_input": user_input}
-
-def rag_skill(user_input: str) -> dict:
-    """基于知识库的检索增强问答(RAG)"""
-    return {"skill": "rag_skill", "user_input": user_input}
-
-def seo_skill(user_input: str) -> dict:
-    """SEO优化分析、关键词研究、标题优化等"""
-    return {"skill": "seo_skill", "user_input": user_input}
-
-def support_skill(user_input: str) -> dict:
-    """客服支持、订单查询、退换货处理、售后问题等"""
-    return {"skill": "support_skill", "user_input": user_input}
-
-def data_analysis_skill(user_input: str) -> dict:
-    """数据分析、趋势分析、异常检测、统计报告等"""
-    return {"skill": "data_analysis_skill", "user_input": user_input}
-
-tools = [
-    StructuredTool.from_function(product_skill),
-    StructuredTool.from_function(ads_skill),
-    StructuredTool.from_function(content_skill),
-    StructuredTool.from_function(help_skill),
-    StructuredTool.from_function(file_analysis_skill),
-    StructuredTool.from_function(inventory_skill),
-    StructuredTool.from_function(competitor_skill),
-    StructuredTool.from_function(report_skill),
-    StructuredTool.from_function(rag_skill),
-    StructuredTool.from_function(seo_skill),
-    StructuredTool.from_function(support_skill),
-    StructuredTool.from_function(data_analysis_skill),
-]
+tools = _build_tools()
 
 # ============================================================
-# Keyword fallback: only activated when LLM fails/times out
+# Keyword fallback: 从 manifest 动态加载(替代硬编码)
 # ============================================================
-KEYWORD_RULES = {
-    "product_skill": ["商品", "销量", "SKU", "sku", "评价", "商品分析", "卖得"],
-    "ads_skill": ["广告", "投放", "ROI", "roi", "推广", "花费", "渠道"],
-    "content_skill": ["文案", "活动策划", "营销", "推广文案", "写一段"],
-    "inventory_skill": ["库存", "补货", "预警", "周转", "缺货"],
-    "competitor_skill": ["竞品", "竞争", "对手", "市场情报"],
-    "report_skill": ["报告", "周报", "月报", "汇总"],
-    "rag_skill": ["规则", "佣金", "上架", "平台规则", "怎么算"],
-    "seo_skill": ["SEO", "seo", "关键词", "搜索量", "标题优化", "长尾词"],
-    "support_skill": ["订单", "退款", "退货", "售后", "客服", "物流"],
-    "data_analysis_skill": ["趋势", "异常", "同比", "环比", "统计"],
-    "file_analysis_skill": ["解析文件", "分析文件", "这个表格", "这份数据"],
-    "help_skill": ["帮助", "你能做什么", "功能", "怎么用"],
-}
+KEYWORD_RULES = skill_registry.get_keyword_rules()
 
 
 def _keyword_scores(user_input: str) -> dict:
     input_lower = user_input.lower()
     scores = {}
     for skill, keywords in KEYWORD_RULES.items():
-        hit_count = sum(1 for kw in keywords if kw.lower() in input_lower)
-        if hit_count > 0:
-            scores[skill] = hit_count
+        # 对命中关键词做大小写去重, 避免 'SKU'/'sku' 这类大小写变体
+        # 被重复计数导致置信度虚高(进而触发交叉验证误覆盖)
+        matched = {kw.lower() for kw in keywords if kw.lower() in input_lower}
+        if matched:
+            scores[skill] = len(matched)
     return scores
 
 
 def keyword_fallback(user_input: str) -> list:
-    """基于关键词匹配返回技能列表，无匹配时返回空列表"""
+    """基于关键词匹配返回技能列表，无匹配时返回空列表。多技能命中时按得分降序返回。"""
     scores = _keyword_scores(user_input)
     if not scores:
         return []
-    best = max(scores, key=scores.get)
-    return [best]
+    # 按得分降序返回所有命中的技能
+    sorted_skills = sorted(scores, key=scores.get, reverse=True)
+    logger.info("[router] keyword_fallback matched %d skill(s): %s", len(sorted_skills), sorted_skills)
+    return sorted_skills
 
 
 _llm_with_tools = None
@@ -117,21 +71,52 @@ _llm_with_tools = None
 def _get_llm_with_tools():
     global _llm_with_tools
     if _llm_with_tools is None:
-        _llm = get_llm()
+        _llm = get_router_llm()
         _llm_with_tools = _llm.bind_tools(tools)
     return _llm_with_tools
 
 
-@timeout(20)
+@timeout(30)
 def _router_llm_call(llm_with_tools, messages):
     """带超时保护的路由 LLM 调用"""
     return llm_with_tools.invoke(messages)
+
 
 def router(state):
     user_input = state["user_input"]
     file_path = state.get("file_path")
     file_content = state.get("file_content")
     history = state.get("history", [])
+
+    # ── 注入防护第一道防线: 路由入口拦截 ──
+    # 必须在路由分发前检测, 防止注入指令被分发到合法技能
+    # (如 inventory_skill) 从而绕过检测
+    if detect_injection(user_input):
+        logger.warning(
+            "[router] INJECTION BLOCKED at routing stage | conversation_id=%s | "
+            "input_len=%d | input_preview=%s"
+            % (state.get("conversation_id", "?"), len(user_input), user_input[:100])
+        )
+        state["tool_result"] = {
+            "skill": "unknown",
+            "user_input": user_input,
+            "data": SAFE_BLOCK_RESPONSE,
+            "injection_blocked": True,
+        }
+        state["skills_to_execute"] = ["unknown"]
+        state["intent"] = "injection_blocked"
+        state["execution_plan"] = None
+        return state
+
+    # ── 间接注入防护: 上传文件内容同样是不可信输入 ──
+    # 攻击者可上传含注入指令的文件/图片, 经 VLM 解析后进入 LLM 上下文
+    if file_content and detect_injection(file_content):
+        logger.warning(
+            "[router] INJECTION in file_content SANITIZED | conversation_id=%s | file=%s | len=%d"
+            % (state.get("conversation_id", "?"), file_path, len(file_content))
+        )
+        file_content = "[文件内容含可疑指令，已为安全拦截。请重新发送常规数据文件。]"
+        state["file_content"] = file_content
 
     logger.info(
         "[router] user_input=%s, conversation_id=%s, has_file=%s"
@@ -142,7 +127,10 @@ def router(state):
         )
     )
 
-    if file_path and file_content:
+    # 只要有 file_path 就走文件快捷路径，file_content 可能为 None（VLM 解析失败时）
+    if file_path:
+        if not file_content:
+            file_content = "[文件已上传，待解析]"
         is_empty_or_file_msg = (
             not user_input.strip()
             or user_input.strip().startswith("[文件]")
@@ -156,7 +144,8 @@ def router(state):
                 "skill": "file_analysis_skill",
                 "user_input": user_input,
                 "file_path": file_path,
-                "file_content": file_content,
+                # 用分隔符包裹不可信文件内容, 降低间接注入风险
+                "file_content": wrap_untrusted(file_content),
             }
             state["skills_to_execute"] = ["file_analysis_skill"]
             state["intent"] = "file_analysis_skill"
@@ -221,7 +210,21 @@ def router(state):
                 selected_skills = [kw_top] + [s for s in selected_skills if s != kw_top]
                 first_params = {"user_input": user_input}
 
-        if "file_analysis_skill" in selected_skills and file_path and file_content:
+            # Multi-skill supplement: if keyword detects 2+ skills but LLM only returned 1
+            # 仅补充关键词置信度>=2 的技能, 避免 conf=1 的弱关键词
+            # 把无关技能误拉进来(如库存查询被'SKU'字样带入 product_skill)
+            if len(kw_scores) >= 2 and len(selected_skills) == 1:
+                sorted_kw = sorted(kw_scores, key=kw_scores.get, reverse=True)
+                for kw_skill in sorted_kw:
+                    if kw_skill not in selected_skills and kw_scores[kw_skill] >= 2:
+                        selected_skills.append(kw_skill)
+                first_params = {"user_input": user_input}
+                logger.info(
+                    "[router] multi-skill supplement: keyword detected %d skills, merged: %s"
+                    % (len(selected_skills), selected_skills)
+                )
+
+        if "file_analysis_skill" in selected_skills and file_path:
             first_params["file_path"] = file_path
             first_params["file_content"] = file_content
 

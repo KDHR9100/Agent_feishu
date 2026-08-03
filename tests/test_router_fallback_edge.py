@@ -29,23 +29,24 @@ class TestKeywordFallbackEdgeCases:
 
     def test_ambiguous_multi_category(self):
         # "商品" -> product, "广告" -> ads, both 1 hit
-        # max() picks first encountered in dict order
-        result = keyword_fallback("商品广告")
-        assert len(result) == 1
-        assert result[0] in ("product_skill", "ads_skill")
+        # v2 多技能设计: 按得分降序返回所有命中技能
+        result = keyword_fallback("销量广告")
+        assert "product_skill" in result
+        assert "ads_skill" in result
 
     def test_tie_breaking_deterministic(self):
         # Same input should always give same result
-        r1 = keyword_fallback("商品广告")
-        r2 = keyword_fallback("商品广告")
+        r1 = keyword_fallback("销量广告")
+        r2 = keyword_fallback("销量广告")
         assert r1 == r2
 
     def test_all_keywords_individually(self):
-        # Every single keyword should map to its skill
+        # Every single keyword should hit its owning skill
+        # (v2 允许多技能共命中, 但归属技能必须在命中列表中)
         for skill, keywords in KEYWORD_RULES.items():
             for kw in keywords:
                 result = keyword_fallback(kw)
-                assert result == [skill], f"keyword '{kw}' expected {skill}, got {result}"
+                assert skill in result, f"keyword '{kw}' expected {skill} in {result}"
 
     def test_substring_false_positive(self):
         # "库" alone should NOT match "库存"

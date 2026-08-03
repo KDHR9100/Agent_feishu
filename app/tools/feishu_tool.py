@@ -133,7 +133,7 @@ class FeishuTool:
             logger.error("[FeishuTool] Failed to get user info: %s" % str(e))
             return {"error": str(e)}
 
-    def download_file(self, file_key: str, save_path: str, message_id: str = "") -> Dict[str, Any]:
+    def download_file(self, file_key: str, save_path: str, message_id: str = "", resource_type: str = "file") -> Dict[str, Any]:
         """
         下载飞书文件。
         如果提供了 message_id，则使用 IM 资源下载 API（用于聊天中的附件）。
@@ -151,7 +151,7 @@ class FeishuTool:
                 encoded_message_id = urllib.parse.quote(message_id, safe='')
                 encoded_file_key = urllib.parse.quote(file_key, safe='')
                 base_url = "https://open.feishu.cn/open-apis/im/v1/messages"
-                url = f"{base_url}/{encoded_message_id}/resources/{encoded_file_key}?type=file"
+                url = f"{base_url}/{encoded_message_id}/resources/{encoded_file_key}?type={resource_type}"
                 logger.info("[FeishuTool] Download URL: %s", url)
 
                 response = requests.get(url, headers=headers, timeout=60)

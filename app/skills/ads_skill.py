@@ -45,20 +45,30 @@ def compare_platforms(platform_data):
     highest_ctr = None
     highest_ctr_platform = None
 
+    # 兼容非 list 输入(如 DB 报错 dict), 避免崩溃
+    if not isinstance(platform_data, list):
+        platform_data = []
+
     for platform in platform_data:
-        roas = platform.get("avg_roas", 0)
-        cpc = platform.get("avg_cpc", float("inf"))
-        ctr = platform.get("avg_ctr", 0)
+        if not isinstance(platform, dict):
+            continue
+        # DB 聚合字段可能为 None, 统一兑底为数值, 避免比较时 TypeError
+        roas = platform.get("avg_roas")
+        roas = roas if isinstance(roas, (int, float)) else 0
+        cpc = platform.get("avg_cpc")
+        cpc = cpc if isinstance(cpc, (int, float)) else float("inf")
+        ctr = platform.get("avg_ctr")
+        ctr = ctr if isinstance(ctr, (int, float)) else 0
 
         if best_roas is None or roas > best_roas:
             best_roas = roas
             best_platform = platform.get("platform", "")
 
-        if cpc < lowest_cpc:
+        if lowest_cpc is None or cpc < lowest_cpc:
             lowest_cpc = cpc
             lowest_cpc_platform = platform.get("platform", "")
 
-        if ctr > highest_ctr:
+        if highest_ctr is None or ctr > highest_ctr:
             highest_ctr = ctr
             highest_ctr_platform = platform.get("platform", "")
 

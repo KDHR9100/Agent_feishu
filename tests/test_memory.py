@@ -1,5 +1,5 @@
 """测试会话记忆（内存 + SQLite 持久化）"""
-import os, sys, pytest
+import os, sys, pytest, uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["DATABASE_URL"] = "sqlite:///./test_memory.db"
 
@@ -7,11 +7,13 @@ class TestLocalMemory:
     def setup_method(self):
         from app.memory.local_memory import LocalMemory
         self.memory = LocalMemory(max_history=5)
+        self._cid = str(uuid.uuid4())[:8]
 
     def test_add_and_get_message(self):
-        self.memory.add_message("conv1", "user", "你好")
-        self.memory.add_message("conv1", "assistant", "你好，有什么可以帮你？")
-        history = self.memory.get_history("conv1")
+        cid = self._cid + "_add"
+        self.memory.add_message(cid, "user", "你好")
+        self.memory.add_message(cid, "assistant", "你好，有什么可以帮你？")
+        history = self.memory.get_history(cid)
         assert len(history) == 2
         assert history[0]["role"] == "user"
 
@@ -39,10 +41,12 @@ class TestLocalMemory:
         assert history == []
 
     def test_multiple_conversations(self):
-        self.memory.add_message("conv_a", "user", "hello_a")
-        self.memory.add_message("conv_b", "user", "hello_b")
-        assert len(self.memory.get_history("conv_a")) == 1
-        assert len(self.memory.get_history("conv_b")) == 1
+        cid_a = self._cid + "_a"
+        cid_b = self._cid + "_b"
+        self.memory.add_message(cid_a, "user", "hello_a")
+        self.memory.add_message(cid_b, "user", "hello_b")
+        assert len(self.memory.get_history(cid_a)) == 1
+        assert len(self.memory.get_history(cid_b)) == 1
 
     def test_format_history(self):
         self.memory.add_message("conv5", "user", "问题")

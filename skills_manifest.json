@@ -1,0 +1,164 @@
+{
+  "version": "1.0",
+  "description": "技能清单 - MCP 动态工具注册数据源",
+  "skills": [
+    {
+      "name": "product_skill",
+      "description": "分析商品销售数据、SKU销售表现、商品评价、单品经营情况。不处理库存数量、补货、缺货（这些属于 inventory_skill）。",
+      "keywords": [
+        "销量",
+        "SKU",
+        "sku",
+        "评价",
+        "商品分析",
+        "商品数据",
+        "卖得"
+      ],
+      "module": "app.skills.product_skill",
+      "function": "product_skill"
+    },
+    {
+      "name": "ads_skill",
+      "description": "分析广告投放效果、ROI、花费等",
+      "keywords": [
+        "广告",
+        "投放",
+        "ROI",
+        "roi",
+        "推广",
+        "花费",
+        "渠道"
+      ],
+      "module": "app.skills.ads_skill",
+      "function": "ads_skill"
+    },
+    {
+      "name": "content_skill",
+      "description": "生成营销文案、商品描述、推广内容等",
+      "keywords": [
+        "文案",
+        "活动策划",
+        "营销",
+        "推广文案",
+        "写一段"
+      ],
+      "module": "app.skills.content_skill",
+      "function": "content_skill"
+    },
+    {
+      "name": "inventory_skill",
+      "description": "分析库存数据、库存预警、补货建议等",
+      "keywords": [
+        "库存",
+        "补货",
+        "预警",
+        "周转",
+        "缺货"
+      ],
+      "module": "app.skills.inventory_skill",
+      "function": "inventory_skill"
+    },
+    {
+      "name": "competitor_skill",
+      "description": "分析竞品数据、市场竞争情报等",
+      "keywords": [
+        "竞品",
+        "竞争",
+        "对手",
+        "市场情报"
+      ],
+      "module": "app.skills.competitor_skill",
+      "function": "competitor_skill"
+    },
+    {
+      "name": "report_skill",
+      "description": "生成运营报告、数据报告、分析报告等",
+      "keywords": [
+        "报告",
+        "周报",
+        "月报",
+        "汇总"
+      ],
+      "module": "app.skills.report_skill",
+      "function": "report_skill"
+    },
+    {
+      "name": "rag_skill",
+      "description": "基于知识库的检索增强问答(RAG)",
+      "keywords": [
+        "规则",
+        "佣金",
+        "上架",
+        "平台规则",
+        "怎么算"
+      ],
+      "module": "app.skills.rag_skill",
+      "function": "rag_skill"
+    },
+    {
+      "name": "seo_skill",
+      "description": "SEO优化分析、关键词研究、标题优化等",
+      "keywords": [
+        "SEO",
+        "seo",
+        "关键词",
+        "搜索量",
+        "标题优化",
+        "长尾词"
+      ],
+      "module": "app.skills.seo_skill",
+      "function": "seo_skill"
+    },
+    {
+      "name": "support_skill",
+      "description": "客服支持、订单查询、退换货处理、售后问题等",
+      "keywords": [
+        "订单",
+        "退款",
+        "退货",
+        "售后",
+        "客服",
+        "物流"
+      ],
+      "module": "app.skills.support_skill",
+      "function": "support_skill"
+    },
+    {
+      "name": "data_analysis_skill",
+      "description": "跨领域深度数据分析、异常检测、同环比统计。仅当需要跨多个领域的综合统计分析时使用；单一商品/广告/库存的日常分析请用对应领域技能，不要用本技能。",
+      "keywords": [
+        "趋势",
+        "异常",
+        "同比",
+        "环比",
+        "统计"
+      ],
+      "module": "app.skills.data_analysis_skill",
+      "function": "data_analysis_skill"
+    },
+    {
+      "name": "file_analysis_skill",
+      "description": "解析上传的文件数据(xlsx/csv/pdf/docx/图片)",
+      "keywords": [
+        "解析文件",
+        "分析文件",
+        "这个表格",
+        "这份数据"
+      ],
+      "module": "app.skills.file_analysis_skill",
+      "function": "file_analysis_skill"
+    },
+    {
+      "name": "help_skill",
+      "description": "提供使用帮助和功能导航",
+      "keywords": [
+        "帮助",
+        "你能做什么",
+        "功能",
+        "怎么用"
+      ],
+      "module": "app.skills.help_skill",
+      "function": "help_skill"
+    }
+  ]
+}

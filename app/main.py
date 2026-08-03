@@ -1,15 +1,28 @@
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Header, Request
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import time
+import os
 
 from app.config import config, logger, log_config_info
 from app.monitoring import monitoring_stats
 
 app = FastAPI(title="Ecommerce Agent", version="1.0.0")
+
+
+# API 鉴权: 当设置了 API_KEY 环境变量时, 敏感端点要求携带匹配的 X-API-Key 请求头
+_API_KEY = os.getenv("API_KEY", "")
+
+
+async def require_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    if not _API_KEY:
+        return None
+    if x_api_key != _API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+    return None
 
 
 @app.exception_handler(Exception)
@@ -76,7 +89,7 @@ async def jingang_consumption():
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, _: None = Depends(require_api_key)):
     try:
         logger.info(
             "Received chat request: conversation_id=%s" % request.conversation_id
@@ -117,7 +130,7 @@ async def chat(request: ChatRequest):
 
 
 @app.post("/rag/query")
-async def rag_query(request: RAGRequest):
+async def rag_query(request: RAGRequest, _: None = Depends(require_api_key)):
     try:
         logger.info("Received RAG query: %s..." % request.query[:50])
         start_time = time.time()
@@ -294,7 +307,7 @@ async def list_documents():
 
 
 @app.post("/documents")
-async def add_document(name: str, content: str):
+async def add_document(name: str, content: str, _: None = Depends(require_api_key)):
     """Add a new document and sync vector store."""
     from app.rag.doc_manager import doc_vector_manager
     doc_vector_manager.doc_manager.add_document(name, content)
@@ -303,7 +316,7 @@ async def add_document(name: str, content: str):
 
 
 @app.delete("/documents/{name}")
-async def delete_document(name: str):
+async def delete_document(name: str, _: None = Depends(require_api_key)):
     """Delete a document and sync vector store."""
     from app.rag.doc_manager import doc_vector_manager
     deleted = doc_vector_manager.doc_manager.delete_document(name)
@@ -315,7 +328,7 @@ async def delete_document(name: str):
 
 
 @app.post("/rag/sync")
-async def sync_vector_store(force: bool = False):
+async def sync_vector_store(force: bool = False, _: None = Depends(require_api_key)):
     """Sync documents with vector store."""
     from app.rag.doc_manager import doc_vector_manager
     result = doc_vector_manager.sync(force_rebuild=force)
@@ -327,3 +340,23 @@ async def rag_status():
     """Get RAG system status."""
     from app.rag.doc_manager import doc_vector_manager
     return doc_vector_manager.get_status()
+
+
+# ============================================================
+# Token Usage Metrics API
+# ============================================================
+
+@app.get("/metrics/usage")
+async def metrics_usage(_: None = Depends(require_api_key)):
+    """Get token usage ranking for the last 24 hours."""
+    return monitoring_stats.get_usage_last_24h()
+
+
+@app.post("/approval/{approval_id}/resolve")
+async def resolve_approval(approval_id: str, approved: bool, _: None = Depends(require_api_key)):
+    """Resolve a pending approval (approve or reject)."""
+    from app.utils.approval import approval_manager
+    ok = approval_manager.resolve(approval_id, approved)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Approval not found or already resolved")
+    return {"approval_id": approval_id, "approved": approved, "resolved": True}

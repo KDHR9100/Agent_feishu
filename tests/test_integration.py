@@ -26,7 +26,7 @@ def _mk_llm():
 
 class TestFullWorkflowTextMessage:
     @patch("app.agent.workflow.get_llm")
-    @patch("app.agent.router.get_llm")
+    @patch("app.agent.router.get_router_llm")
     @patch("app.agent.router._llm_with_tools", None)
     def test_full_workflow_text_message(self, mock_router_llm, mock_wf_llm):
         ml, ml_t = _mk_llm()
@@ -149,7 +149,7 @@ class TestRouterToolBinding:
         ml, ml_t = _mk_llm()
         tc = {"name": "product_skill", "args": {"user_input": "t"}, "id": "c1"}
         ml_t.invoke.return_value = _mk_resp("", [tc])
-        with patch("app.agent.router.get_llm", return_value=ml):
+        with patch("app.agent.router.get_router_llm", return_value=ml):
             import app.agent.router as rm
             rm._llm_with_tools = None
             st = {"user_input": "check sales", "conversation_id": "tb"}

@@ -1,4 +1,4 @@
-from dotenv import load_dotenv
+﻿from dotenv import load_dotenv
 import os
 import logging
 from logging.config import dictConfig
@@ -22,11 +22,13 @@ dictConfig(
                 "level": os.getenv("LOG_LEVEL", "INFO"),
             },
             "file": {
-                "class": "logging.FileHandler",
+                "class": "logging.handlers.RotatingFileHandler",
                 "filename": "app.log",
                 "formatter": "default",
                 "level": os.getenv("LOG_LEVEL", "INFO"),
                 "encoding": "utf-8",
+                "maxBytes": 10 * 1024 * 1024,
+                "backupCount": 5,
             },
         },
         "root": {
@@ -61,6 +63,16 @@ class Config:
     )
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+    # 主 LLM 请求超时与重试: 缓解 token-plan 端点波动导致的 30s 超时
+    LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "60"))
+    LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+    # ===== VLM (视觉语言模型) 配置 =====
+    VLM_API_KEY = os.getenv("VLM_API_KEY", "") or os.getenv("LLM_API_KEY", "")
+    VLM_API_BASE = os.getenv("VLM_API_BASE", "") or os.getenv(
+        "LLM_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    VLM_MODEL_NAME = os.getenv("VLM_MODEL_NAME", "qwen-vl-max")
 
     EMBEDDING_API_KEY = (
         os.getenv("EMBEDDING_API_KEY", "")
@@ -104,8 +116,22 @@ class Config:
     def OPENAI_MODEL_NAME(self):
         return self.LLM_MODEL_NAME
 
+    # ===== Router LLM (task routing dedicated fast model) config =====
+    ROUTER_API_KEY = os.getenv("ROUTER_API_KEY", "") or os.getenv("LLM_API_KEY", "")
+    ROUTER_API_BASE = os.getenv("ROUTER_API_BASE", "") or os.getenv(
+        "LLM_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL_NAME", "") or os.getenv(
+        "LLM_MODEL_NAME", "deepseek-v4-pro"
+    )
+    # router 是分类任务, 温度设 0 保证路由稳定可复现
+    ROUTER_TEMPERATURE = float(os.getenv("ROUTER_TEMPERATURE", "0"))
+
     @property
     def LLM_PROVIDER(self):
+        explicit = os.getenv("LLM_PROVIDER", "")
+        if explicit:
+            return explicit
         if "deepseek" in self.LLM_API_BASE.lower():
             return "DeepSeek"
         elif "dashscope" in self.LLM_API_BASE.lower():
@@ -119,6 +145,27 @@ class Config:
 config = Config()
 
 _llm_instance = None
+_router_llm_instance = None
+
+
+def get_router_llm():
+    """Task routing dedicated LLM: fast small model, independent key/base configurable via env"""
+    global _router_llm_instance
+    if _router_llm_instance is None:
+        from langchain_openai import ChatOpenAI
+
+        logger.info(
+            "Initializing Router LLM: %s (base: %s)"
+            % (config.ROUTER_MODEL_NAME, config.ROUTER_API_BASE)
+        )
+        _router_llm_instance = ChatOpenAI(
+            model=config.ROUTER_MODEL_NAME,
+            temperature=config.ROUTER_TEMPERATURE,
+            max_tokens=config.LLM_MAX_TOKENS,
+            api_key=config.ROUTER_API_KEY,
+            base_url=config.ROUTER_API_BASE,
+        )
+    return _router_llm_instance
 
 
 def get_llm():
@@ -138,6 +185,8 @@ def get_llm():
                 max_tokens=config.LLM_MAX_TOKENS,
                 api_key=config.LLM_API_KEY,
                 base_url=config.LLM_API_BASE,
+                timeout=config.LLM_REQUEST_TIMEOUT,
+                max_retries=config.LLM_MAX_RETRIES,
             )
             logger.info("LLM initialized successfully")
         except Exception as e:
@@ -192,11 +241,16 @@ def log_config_info():
     logger.info("Application Configuration")
     logger.info("=" * 60)
     logger.info("LLM Provider: %s" % config.LLM_PROVIDER)
+    logger.info("Router LLM: %s" % config.ROUTER_MODEL_NAME)
     logger.info("LLM API Key: %s" % ("***" if config.LLM_API_KEY else "NOT SET"))
     logger.info("LLM API Base: %s" % config.LLM_API_BASE)
     logger.info("LLM Model: %s" % config.LLM_MODEL_NAME)
     logger.info("LLM Temperature: %s" % config.LLM_TEMPERATURE)
     logger.info("LLM Max Tokens: %s" % config.LLM_MAX_TOKENS)
+    logger.info("-" * 60)
+    logger.info("VLM Model: %s" % config.VLM_MODEL_NAME)
+    logger.info("VLM API Base: %s" % config.VLM_API_BASE)
+    logger.info("VLM API Key: %s" % ("***" if config.VLM_API_KEY else "NOT SET"))
     logger.info("-" * 60)
     logger.info("Use Local Embedding: %s" % config.USE_LOCAL_EMBEDDING)
     logger.info("Local Embedding Model: %s" % config.LOCAL_EMBEDDING_MODEL)

@@ -17,6 +17,102 @@ logging.basicConfig(
 )
 logger = logging.getLogger("feishu_ws_official")
 
+# ============================================================
+# 问候语检测 + 飞书卡片
+# ============================================================
+GREETING_KEYWORDS = [
+    "你好", "您好", "hello", "hi", "hey", "嗨", "哈喽",
+    "早上好", "下午好", "晚上好", "在吗",
+    "你是谁", "介绍一下", "帮助", "你能做什么",
+    "你会什么", "功能", "你好呀", "在不在",
+]
+
+
+def _is_greeting(text: str) -> bool:
+    """检测是否为问候/自我介绍请求"""
+    text_lower = text.strip().lower()
+    # 短文本 + 关键词命中
+    if len(text_lower) <= 20:
+        for kw in GREETING_KEYWORDS:
+            if kw in text_lower:
+                return True
+    return False
+
+
+def _build_greeting_card() -> str:
+    """构建自我介绍飞书卡片"""
+    import json
+    card = {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "\U0001f44b 你好，我是电商运营 Agent"},
+            "template": "blue",
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "我是你的 **AI 电商运营助手**，基于 LangGraph + DeepSeek 构建。"
+                        "我可以帮你处理以下工作："
+                    ),
+                },
+            },
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "\U0001f4ca **数据分析类**\n"
+                        "\u2022 商品销售分析 \u2014 \u201c分析商品销量\u201d\n"
+                        "\u2022 广告效果分析 \u2014 \u201c广告ROI是多少\u201d\n"
+                        "\u2022 库存预警查询 \u2014 \u201c库存预警\u201d\n"
+                        "\u2022 数据趋势/异常 \u2014 \u201c转化率趋势\u201d"
+                    ),
+                },
+            },
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "\u270d\ufe0f **内容生成类**\n"
+                        "\u2022 营销文案撰写 \u2014 \u201c写一段小红书文案\u201d\n"
+                        "\u2022 SEO 标题优化 \u2014 \u201c优化商品标题SEO\u201d\n"
+                        "\u2022 竞品情报分析 \u2014 \u201c分析竞品动态\u201d"
+                    ),
+                },
+            },
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "\U0001f4c1 **文件与报告类**\n"
+                        "\u2022 上传文件解析 \u2014 直接发 xlsx/csv/pdf/图片\n"
+                        "\u2022 运营报告生成 \u2014 \u201c生成本周运营报告\u201d\n"
+                        "\u2022 客服/售后处理 \u2014 \u201c查询订单状态\u201d"
+                    ),
+                },
+            },
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "\U0001f4a1 **快速开始**：直接发送你的问题，或上传文件让我分析。\n"
+                        "复杂任务也可以一句话搞定，例如：\n"
+                        "\u201c查库存，低于100件就生成补货报告，再看看广告费要不要追加\u201d"
+                    ),
+                },
+            },
+        ],
+    }
+    return json.dumps(card, ensure_ascii=False)
+
 # 确保 Lark SDK 日志也输出到 app.log
 _lark_logger = logging.getLogger("Lark")
 _lark_logger.setLevel(logging.INFO)
@@ -142,14 +238,17 @@ def do_p2_im_message_receive_v1(data):
                     content_json = content_raw
                 file_key = (
                     content_json.get("file_key")
+                    or content_json.get("image_key")
                     or content_json.get("file_token")
                     or content_json.get("media_id")
                     or ""
                 )
-                file_name = content_json.get("file_name", "unknown")
+                file_name = content_json.get("file_name", "")
+                if not file_name and msg_type == "image":
+                    file_name = "image.jpg"
                 file_size = content_json.get("file_size", 0)
                 if file_key:
-                    file_info = {"file_key": file_key, "file_name": file_name, "file_size": file_size}
+                    file_info = {"file_key": file_key, "file_name": file_name, "file_size": file_size, "msg_type": msg_type}
                     text_content = f"[文件] {file_name}"
                     logger.info("[Feishu WS] [%s] File detected - key=%s, name=%s", track_id, file_key, file_name)
                 else:
@@ -158,6 +257,28 @@ def do_p2_im_message_receive_v1(data):
             except Exception as e:
                 text_content = "[文件] 解析失败"
                 logger.error("[Feishu WS] [%s] Failed to parse file: %s", track_id, str(e))
+        elif msg_type == "post":
+            # 富文本消息: 提取所有文本段落
+            try:
+                if isinstance(content_raw, str):
+                    post_data = json.loads(content_raw)
+                else:
+                    post_data = content_raw
+                # 飞书 post 格式: {"zh_cn": {"title": "", "content": [[{"tag":"text","text":"..."}]]}}
+                texts = []
+                for lang_key in ["zh_cn", "en_us", "ja_jp"]:
+                    if lang_key in post_data:
+                        paragraphs = post_data[lang_key].get("content", [])
+                        for para in paragraphs:
+                            for elem in para:
+                                if elem.get("tag") == "text":
+                                    texts.append(elem.get("text", ""))
+                        break
+                text_content = "".join(texts) if texts else "[富文本消息]"
+                logger.info("[Feishu WS] [%s] post parsed, len=%d", track_id, len(text_content))
+            except Exception as e:
+                text_content = "[富文本消息]"
+                logger.warning("[Feishu WS] [%s] post parse failed: %s", track_id, str(e))
         else:
             logger.info("[Feishu WS] [%s] Unhandled msg_type: %s", track_id, msg_type)
             return
@@ -197,13 +318,14 @@ def _handle_single_message(msg):
                 file_key = file_info.get("file_key", "")
                 raw_file_name = file_info.get("file_name", "unknown")
                 file_name = os.path.basename(raw_file_name)
-                allowed_extensions = {".xlsx", ".xls", ".csv", ".pdf", ".docx"}
+                allowed_extensions = {".xlsx", ".xls", ".csv", ".pdf", ".docx", ".jpg", ".jpeg", ".png", ".webp"}
                 _, file_ext = os.path.splitext(file_name)
                 if file_ext.lower() not in allowed_extensions:
                     logger.warning("[Feishu WS] [%s] Rejected file type: %s", track_id, file_ext)
                     feishu_tool.reply_message(msg["message_id"], f"不支持的文件类型：{file_ext}，请上传 Excel/CSV/PDF/Word 文件。")
                     return
-                save_path = f"data/uploads/{file_name}"
+                # uuid 前缀避免同名文件相互覆盖
+                save_path = f"data/uploads/{uuid.uuid4().hex[:8]}_{file_name}"
 
                 try:
                     feishu_tool.reply_message(msg["message_id"], "\U0001f504 正在解析文件，请稍候...")
@@ -211,8 +333,11 @@ def _handle_single_message(msg):
                     pass
 
                 logger.info("[Feishu WS] [%s] Downloading file: %s", track_id, file_key)
+                # 图片用 type=image, 文件用 type=file
+                _res_type = "image" if file_info.get("msg_type") == "image" else "file"
                 download_result = feishu_tool.download_file(
-                    file_key, save_path, message_id=msg["message_id"]
+                    file_key, save_path, message_id=msg["message_id"],
+                    resource_type=_res_type,
                 )
 
                 if download_result.get("success"):
@@ -221,6 +346,15 @@ def _handle_single_message(msg):
                     parse_result = file_parser_tool.parse_local_file(file_path)
                     if parse_result.get("error"):
                         logger.error("[Feishu WS] [%s] Parse error: %s", track_id, parse_result.get("error"))
+                        # 图片解析失败时直接告知用户，不走 Agent
+                        if file_info.get("msg_type") == "image":
+                            _err = parse_result.get("error", "")
+                            if "403" in _err or "quota" in _err.lower() or "Free" in _err:
+                                _tip = "❌ 图片解析失败：VLM 视觉模型免费额度已用尽。请到 DashScope 控制台充值或关闭“仅使用免费额度”开关。"
+                            else:
+                                _tip = f"❌ 图片解析失败：{_err[:100]}。请尝试重新上传或换用 .xlsx/.csv 格式。"
+                            feishu_tool.reply_message(msg["message_id"], _tip)
+                            return
                     else:
                         file_content = file_parser_tool.format_file_summary(parse_result, file_name)
                         logger.info(
@@ -238,6 +372,13 @@ def _handle_single_message(msg):
             answer = guardrails_result["message"]
             logger.info("[Feishu WS] [%s] Guardrails: %s", track_id, guardrails_result["action"])
         else:
+            # 问候语拦截: 直接返回飞书卡片, 不走 Agent
+            if _is_greeting(msg["content"]):
+                logger.info("[Feishu WS] [%s] greeting detected, sending card", track_id)
+                card_json = _build_greeting_card()
+                feishu_tool.reply_message(msg["message_id"], card_json, msg_type="interactive")
+                return
+
             try:
                 agent_input = {
                     "user_input": msg["content"],
@@ -248,8 +389,55 @@ def _handle_single_message(msg):
                 if file_content:
                     agent_input["file_content"] = file_content
 
-                result = agent.invoke(agent_input)
-                answer = result.get("answer", "抱歉，我无法处理您的请求。")
+                # 流式执行: 分阶段推送进度消息
+                # 技能名中文映射（运营人员可读）
+                _SKILL_CN = {
+                    "inventory_skill": "库存管理",
+                    "ads_skill": "广告分析",
+                    "product_skill": "商品管理",
+                    "content_skill": "内容创作",
+                    "seo_skill": "SEO优化",
+                    "competitor_skill": "竞品分析",
+                    "trend_skill": "趋势分析",
+                    "report_skill": "报告生成",
+                    "support_skill": "客服助手",
+                    "file_analysis_skill": "文件解析",
+                    "help_skill": "帮助中心",
+                    "order_skill": "订单管理",
+                }
+                progress_sent = set()
+                _cached_skills = []
+                result = None
+                try:
+                    for chunk in agent.stream(agent_input):
+                        for node_name, node_state in chunk.items():
+                            # 进入 router 时推送思考状态
+                            if node_name == "router" and "router" not in progress_sent:
+                                try:
+                                    feishu_tool.reply_message(msg["message_id"], "🤔 正在分析意图...")
+                                except Exception:
+                                    pass
+                                _cached_skills = node_state.get("skills_to_execute", [])
+                                progress_sent.add("router")
+                            # 进入 skill_executor 时推送技能调用状态
+                            elif node_name == "skill_executor" and "skill" not in progress_sent:
+                                skills = node_state.get("skills_to_execute") or _cached_skills
+                                _raw = skills[0] if skills else ""
+                                skill_label = _SKILL_CN.get(_raw, _raw) if _raw else "处理"
+                                try:
+                                    feishu_tool.reply_message(msg["message_id"], f"📊 正在调用 [{skill_label}]...")
+                                except Exception:
+                                    pass
+                                progress_sent.add("skill")
+                            result = node_state
+                except Exception as stream_err:
+                    logger.warning("[Feishu WS] [%s] stream failed, fallback to invoke: %s", track_id, stream_err)
+                    result = agent.invoke(agent_input)
+
+                if result:
+                    answer = result.get("answer", "抱歉，我无法处理您的请求。")
+                else:
+                    answer = "抱歉，我无法处理您的请求。"
                 logger.info("[Feishu WS] [%s] Agent done, answer length=%d", track_id, len(answer))
 
             except Exception as e:
@@ -307,6 +495,7 @@ def start_feishu_ws(app_id: str, app_secret: str):
     event_handler = lark.EventDispatcherHandler.builder(encrypt_key, verification_token) \
         .register_p2_im_message_receive_v1(do_p2_im_message_receive_v1) \
         .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(lambda x: None) \
+        .register_p2_im_message_message_read_v1(lambda x: None) \
         .build()
 
     # 创建 WebSocket 客户端

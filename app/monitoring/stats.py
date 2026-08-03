@@ -1,8 +1,8 @@
 import time
 import logging
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
-from datetime import datetime
+from typing import Dict, Any, Optional, List
+from datetime import datetime, timedelta
 
 logger = logging.getLogger("monitoring")
 
@@ -80,6 +80,82 @@ class MonitoringStats:
     def record_intent(self, intent: str):
         with self._lock:
             self.intent_counts[intent] = self.intent_counts.get(intent, 0) + 1
+
+    def record_token_usage(
+        self,
+        skill_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        conversation_id: str = "",
+    ):
+        """记录技能级别的 token 消耗到 SQLite"""
+        total = input_tokens + output_tokens
+        try:
+            from app.models.database import SessionLocal
+            from app.models.models import TokenUsageLog
+
+            session = SessionLocal()
+            try:
+                log = TokenUsageLog(
+                    skill_name=skill_name,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total,
+                    conversation_id=conversation_id,
+                    created_at=datetime.utcnow(),
+                )
+                session.add(log)
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("[monitoring] token_usage DB write failed: %s", e)
+
+    def get_usage_last_24h(self) -> Dict[str, Any]:
+        """查询近 24 小时各技能的 token 消耗排名"""
+        try:
+            from app.models.database import SessionLocal
+            from app.models.models import TokenUsageLog
+            from sqlalchemy import func
+
+            session = SessionLocal()
+            try:
+                cutoff = datetime.utcnow() - timedelta(hours=24)
+                rows = (
+                    session.query(
+                        TokenUsageLog.skill_name,
+                        func.count(TokenUsageLog.id).label("call_count"),
+                        func.sum(TokenUsageLog.input_tokens).label("total_input"),
+                        func.sum(TokenUsageLog.output_tokens).label("total_output"),
+                        func.sum(TokenUsageLog.total_tokens).label("total_tokens"),
+                    )
+                    .filter(TokenUsageLog.created_at >= cutoff)
+                    .group_by(TokenUsageLog.skill_name)
+                    .order_by(func.sum(TokenUsageLog.total_tokens).desc())
+                    .all()
+                )
+                skills = [
+                    {
+                        "skill_name": r.skill_name,
+                        "call_count": r.call_count,
+                        "input_tokens": r.total_input or 0,
+                        "output_tokens": r.total_output or 0,
+                        "total_tokens": r.total_tokens or 0,
+                    }
+                    for r in rows
+                ]
+                grand_total = sum(s["total_tokens"] for s in skills)
+                return {
+                    "period": "last_24h",
+                    "generated_at": datetime.utcnow().isoformat(),
+                    "grand_total_tokens": grand_total,
+                    "skill_ranking": skills,
+                }
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("[monitoring] usage query failed: %s", e)
+            return {"period": "last_24h", "error": str(e), "skill_ranking": []}
 
     def get_health_status(self) -> Dict[str, Any]:
         uptime = time.time() - self.start_time
