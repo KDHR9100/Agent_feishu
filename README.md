@@ -82,6 +82,8 @@ feishu_tool.reply_message() --- 回复用户
 | 技能注册 | MCP manifest | skills_manifest.json 动态热插拔（mtime 检测，免重启） |
 | 可观测性 | Token 回调记账 | router/planner/技能/reflect/answer 分技能统计 |
 | 审批流 | 飞书交互卡片 | card.action.trigger 回调 + 后台执行 + SQLite 动作日志 |
+| 业务度量 | BusinessTaskLog | 按用户记录任务（user_id/技能/成败/耗时），/metrics/business 输出活跃用户、成功率与节省工时估算 |
+| 流量防护 | 滑动窗口限流 | 按用户 RATE_LIMIT_PER_MINUTE 限流，/chat 返回 429，飞书入口友好提示 |
 | 多模态 | VLM | 图片解析为结构化表格（file_analysis_skill） |
 
 ---
@@ -334,6 +336,7 @@ LocalMemory 双层存储架构：
 |------|------|
 | inventory_check | 库存预警检查，按品类阈值检测低库存 |
 | daily_report | 日报生成 |
+| weekly_business_report | 每周一 09:30 生成业务价值报告（活跃用户/任务量/节省工时），保存到 data/reports/ |
 ---
 
 ## 11. 项目结构
@@ -353,9 +356,10 @@ Agent_feishu/
 │   │   └── local_memory.py       # 双层记忆（内存 LRU + SQLite 持久化）
 │   ├── models/
 │   │   ├── database.py           # SQLAlchemy 引擎
-│   │   └── models.py             # ProductSale, AdsPerformance 数据模型
+│   │   └── models.py             # ProductSale, AdsPerformance, BusinessTaskLog 数据模型
 │   ├── monitoring/
-│   │   └── stats.py              # 监控统计
+│   │   ├── stats.py              # 监控统计
+│   │   └── business.py           # 业务价值度量（DAU/成功率/节省工时）
 │   ├── rag/
 │   │   ├── vectorstore.py        # FAISS + 分块 + Embedding 三级降级
 │   │   ├── hybrid_search.py      # BM25 + 向量 + RRF 融合 + CrossEncoder 精排
@@ -397,7 +401,8 @@ Agent_feishu/
 │   │   ├── approval.py           # 审批管理器（高危关键词门控 + 挂起执行）
 │   │   ├── action_log.py         # 审批动作日志（SQLite）
 │   │   ├── security.py           # API 鉴权
-│   │   └── tracing.py            # 节点耗时追踪
+│   │   ├── tracing.py            # 节点耗时追踪
+│   │   └── rate_limiter.py       # 滑动窗口限流器（每用户每分钟阈值）
 │   ├── config.py                 # 配置管理（环境变量）
 │   ├── prompts.py                # Prompt 模板
 │   └── main.py                   # FastAPI 入口
@@ -501,7 +506,7 @@ docker compose down
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | / | 服务状态 |
-| GET | /health | 健康检查 |
+| GET | /health | 健康检查（含调用计数与 P95 延迟） |
 | GET | /health/details | 健康详情 |
 | POST | /chat | 主聊天接口 |
 | POST | /rag/query | RAG 查询 |
@@ -513,6 +518,7 @@ docker compose down
 | POST | /rag/sync | 同步向量库（?force=true 全量重建） |
 | GET | /rag/status | RAG 状态 |
 | GET | /metrics/usage | 分技能 Token 消耗统计（近 24h 排行） |
+| GET | /metrics/business | 业务价值指标：活跃用户数/任务量/成功率/节省工时估算（?days=N，默认 7） |
 | GET | /health/jingang | 金刚消耗监控 |
 | POST | /approval/{approval_id}/resolve | 审批单批准/拒绝（?approved=true/false） |
 | POST | /optimize/pricing | L4 智能定价（蒙特卡洛模拟） |
@@ -548,6 +554,12 @@ docker compose down
 | setup_test_database | session, autouse | 创建 product_sales / ads_performance 表 + 种子数据 |
 | tmp_dir | function | 临时目录，测试后自动清理 |
 | file_tool | function | 沙箱化 FileTool（基于 tmp_dir） |
+
+### test_business_metrics.py — 业务度量与限流器（10 个测试）
+
+- TestBusinessMetricsRecord (4): 汇总计数、节省工时仅计成功任务、DAU 与 Top 用户、技能分布
+- TestBusinessMetricsMemoryFallback (2): DB 不可用内存降级、价值报告章节完整性
+- TestRateLimiter (4): 阈值限流、remaining/reset、窗口滑过、环境变量默认值
 
 ### test_file_tool.py — 文件工具（13 个测试）
 
@@ -599,7 +611,7 @@ docker compose down
 
 ### test_scheduler.py — 定时调度（8 个测试）
 
-初始化、启停、2 个注册任务、状态结构、库存检查安全、日报安全、重复启动幂等、next_run_time
+初始化、启停、3 个注册任务（含每周业务价值报告）、状态结构、库存检查安全、日报安全、重复启动幂等、next_run_time
 
 ### test_tools.py — 关键词 + 工单工具（11 个测试）
 
@@ -673,6 +685,7 @@ GitHub Actions（.github/workflows/ci.yml）：
 | API 鉴权 | API_KEY | "" | HTTP 接口 X-API-Key，**必填**；未配置时受保护端点默认拒绝（fail-closed） |
 | 审批门 | APPROVAL_ENABLED | false | 高危操作（降价/打折等）飞书审批开关 |
 | 审批操作者白名单 | APPROVAL_OPERATORS | "" | 飞书 open_id 逗号分隔；启用审批门时必填，仅名单内用户可批准/拒绝/点选决策 |
+| 每用户限流 | RATE_LIMIT_PER_MINUTE | 30 | 滑动窗口限流（次/分钟），/chat 与飞书入口生效，超限返回 429/提示 |
 | 真实执行模式 | EXECUTOR_REAL_MODE | false | true 时执行器对接真实店铺平台（当前适配器为预留实现） |
 
 ---

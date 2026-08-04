@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON
+from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, Text, JSON
 from datetime import datetime
 from .database import Base
 
@@ -96,3 +96,20 @@ class TokenUsageLog(Base):
 
     def __repr__(self):
         return f"<TokenUsageLog(skill={self.skill_name}, total={self.total_tokens})>"
+
+
+class BusinessTaskLog(Base):
+    """业务任务日志表 - 记录每次用户任务, 支撑商业价值度量(活跃用户/成功率/节省工时)"""
+    __tablename__ = "business_task_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(100), index=True, nullable=False)
+    conversation_id = Column(String(100), index=True)
+    skill_name = Column(String(100), index=True, nullable=False)
+    channel = Column(String(50), default="feishu")  # feishu / api
+    success = Column(Boolean, default=True)
+    duration_seconds = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    def __repr__(self):
+        return f"<BusinessTaskLog(user={self.user_id}, skill={self.skill_name}, success={self.success})>"

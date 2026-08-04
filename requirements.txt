@@ -2,7 +2,6 @@
 fastapi>=0.100
 uvicorn>=0.20
 pydantic>=2.0
-python-multipart>=0.0.5
 
 # LLM & LangChain
 langchain-core>=0.2
@@ -17,12 +16,9 @@ langgraph>=0.2
 sentence-transformers>=2.0
 faiss-cpu>=1.7
 
-# LLM Provider
-dashscope>=1.0
-
 # Feishu Integration
 lark-oapi>=1.0
-pycryptodome>=3.15
+# pycryptodome 由 lark-oapi 作为传递依赖引入（飞书事件解密），无需单独声明
 
 # Data Processing
 pandas>=2.0
@@ -59,9 +55,9 @@ python-dotenv>=1.0
 pytest>=8.0
 
 # Dev Tools
-flake8==6.1.0
-mypy==1.11.0
-bandit==1.9.4
+flake8>=7.0
+mypy>=1.11
+bandit>=1.9
 
 # Hybrid Search & Rerank
 rank-bm25>=0.2.2

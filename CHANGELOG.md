@@ -4,6 +4,18 @@
 
 ---
 
+## [2.1.0] - 2026-08-04（商业价值度量与生产化加固）
+
+### 新增
+- **业务价值度量层**（app/monitoring/business.py）：每次任务按 user_id/技能/成败/耗时落 BusinessTaskLog（SQLite），`GET /metrics/business?days=N` 输出任务量、成功率、活跃用户数、DAU 分布、Top 用户与**节省工时估算**（按各技能人工基准耗时 MANUAL_TIME_MINUTES 换算）；DB 不可用时自动降级内存统计，度量失败不影响主流程。
+- **埋点接入**：飞书 WS 入口（sender open_id + 路由技能 + 端到端耗时）与 `/chat` API（新增可选 user_id 字段）双通道记录。
+- **每用户滑动窗口限流**（app/utils/rate_limiter.py）：`RATE_LIMIT_PER_MINUTE`（默认 30 次/分钟），/chat 超限返回 429，飞书入口回复友好提示；限流器自身异常 fail-open。
+- **SLA 指标**：MetricCounter 增加 P95 延迟（最近 200 次样本），/health 输出 llm_calls 与 rag_queries 的 p95_time_ms。
+- **每周业务价值报告**：APScheduler 每周一 09:30 生成 Markdown 报告（使用规模/效率收益/技能分布/Top 用户/DAU）保存至 data/reports/。
+- **测试**：tests/test_business_metrics.py 覆盖度量汇总、工时换算、内存兜底、报告生成与限流窗口行为（13 个用例）。
+
+---
+
 ## [2.0.0] - 2026-08-03（第一次大更新）
 
 ### 新增

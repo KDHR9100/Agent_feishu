@@ -386,6 +386,17 @@ def _handle_single_message(msg):
     try:
         logger.info("[Feishu WS] [%s] Processing message (thread=%s)", track_id, threading.current_thread().name)
 
+        # 生产流控: 按用户滑动窗口限流 (限流器自身异常时 fail-open, 不阻断消息)
+        try:
+            from app.utils.rate_limiter import rate_limiter
+            _rl_key = "feishu:%s" % (msg.get("sender_id") or msg.get("chat_id") or "anon")
+            if not rate_limiter.allow(_rl_key):
+                logger.warning("[Feishu WS] [%s] rate limited, user=%s", track_id, msg.get("sender_id"))
+                _safe_reply(msg["message_id"], "您的请求过于频繁，请稍后再试。")
+                return
+        except Exception as _rl_err:
+            logger.warning("[Feishu WS] [%s] rate limiter error (fail-open): %s", track_id, _rl_err)
+
         # 即时回执: 保证 3 秒内送达首片消息 (流式体验 P2 要求)
         _safe_reply(msg["message_id"], "\U0001f914 已收到，正在思考...")
 
@@ -545,6 +556,22 @@ def _handle_single_message(msg):
             except Exception as e:
                 logger.error("[Feishu WS] [%s] Agent error: %s", track_id, str(e))
                 answer = "处理您的问题时出现内部错误，请稍后重试。"
+
+        # ---------- 业务度量: 每次完成的任务记一条使用记录 (商业价值量化) ----------
+        try:
+            if guardrails_result.get("action") == "allow" and "answer" in locals():
+                from app.monitoring.business import business_metrics
+                _biz_skills = locals().get("_cached_skills") or []
+                business_metrics.record_task(
+                    user_id=msg.get("sender_id") or "unknown",
+                    skill_name=_biz_skills[0] if _biz_skills else "general",
+                    success=isinstance(answer, str) and "内部错误" not in answer,
+                    duration_seconds=time.time() - msg.get("receive_time", time.time()),
+                    conversation_id=msg.get("chat_id", ""),
+                    channel="feishu",
+                )
+        except Exception as _biz_err:
+            logger.warning("[Feishu WS] [%s] business metrics record failed: %s", track_id, _biz_err)
 
         # ---------- 回复消息 ----------
         try:

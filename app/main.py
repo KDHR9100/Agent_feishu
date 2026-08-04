@@ -76,6 +76,8 @@ app.include_router(optimizer_router)
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = "default"
+    # 用户标识(飞书 open_id 等): 用于限流与业务价值度量, API 调用方缺省为 api_user
+    user_id: Optional[str] = "api_user"
 
 
 class RAGRequest(BaseModel):
@@ -104,6 +106,11 @@ async def jingang_consumption():
 
 @app.post("/chat")
 async def chat(request: ChatRequest, _: None = Depends(require_api_key)):
+    # 生产流控: 按用户滑动窗口限流, 防止单用户打满 LLM 配额
+    from app.utils.rate_limiter import rate_limiter
+    _rl_key = "api:%s" % (request.user_id or request.conversation_id or "anon")
+    if not rate_limiter.allow(_rl_key):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
     try:
         logger.info(
             "Received chat request: conversation_id=%s" % request.conversation_id
@@ -131,6 +138,19 @@ async def chat(request: ChatRequest, _: None = Depends(require_api_key)):
             monitoring_stats.record_llm_call(
                 duration, token_usage=result["token_usage"]
             )
+        # 业务度量: 按用户维度记录任务 (商业价值量化, 失败不影响主流程)
+        try:
+            from app.monitoring.business import business_metrics
+            business_metrics.record_task(
+                user_id=request.user_id,
+                skill_name=result.get("intent") or "workflow",
+                success=True,
+                duration_seconds=duration,
+                conversation_id=request.conversation_id,
+                channel="api",
+            )
+        except Exception as biz_err:
+            logger.warning("Business metrics record failed: %s" % biz_err)
         logger.info("Workflow response time: %.2fs" % duration)
         return {
             "status": "success",
@@ -414,6 +434,14 @@ async def rag_status():
 async def metrics_usage(_: None = Depends(require_api_key)):
     """Get token usage ranking for the last 24 hours."""
     return monitoring_stats.get_usage_last_24h()
+
+
+@app.get("/metrics/business")
+async def metrics_business(days: int = 7, _: None = Depends(require_api_key)):
+    """业务价值指标: 活跃用户数/任务量/成功率/节省工时估算 (近 N 天, 默认 7, 上限 90)"""
+    from app.monitoring.business import business_metrics
+    days = max(1, min(int(days or 7), 90))
+    return business_metrics.get_summary(days=days)
 
 
 @app.post("/approval/{approval_id}/resolve")

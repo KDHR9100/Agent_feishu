@@ -1,6 +1,7 @@
 import time
 import logging
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
@@ -14,10 +15,13 @@ class MetricCounter:
     min_time: float = float("inf")
     max_time: float = 0.0
     errors: int = 0
+    # 最近 200 次耗时样本: 用于 P95 等 SLA 分位数指标
+    recent_durations: "deque" = field(default_factory=lambda: deque(maxlen=200))
 
     def add(self, duration: float, success: bool = True):
         self.count += 1
         self.total_time += duration
+        self.recent_durations.append(duration)
         if duration < self.min_time:
             self.min_time = duration
         if duration > self.max_time:
@@ -28,6 +32,15 @@ class MetricCounter:
     @property
     def avg_time(self) -> float:
         return self.total_time / self.count if self.count > 0 else 0.0
+
+    @property
+    def p95_time(self) -> float:
+        """P95 延迟 (SLA 指标): 基于最近 200 次样本"""
+        if not self.recent_durations:
+            return 0.0
+        samples = sorted(self.recent_durations)
+        idx = max(0, int(round(0.95 * len(samples))) - 1)
+        return samples[idx]
 
 
 class MonitoringStats:
@@ -176,6 +189,7 @@ class MonitoringStats:
                     "avg_time_ms": round(self.llm_calls.avg_time * 1000, 2),
                     "min_time_ms": round(min_time, 2),
                     "max_time_ms": round(max_time, 2),
+                    "p95_time_ms": round(self.llm_calls.p95_time * 1000, 2),
                     "error_rate": round(
                         self.llm_calls.errors / max(self.llm_calls.count, 1) * 100, 2
                     ),
@@ -203,6 +217,7 @@ class MonitoringStats:
                 "rag_queries": {
                     "count": self.rag_queries.count,
                     "avg_time_ms": round(self.rag_queries.avg_time * 1000, 2),
+                    "p95_time_ms": round(self.rag_queries.p95_time * 1000, 2),
                     "error_rate": round(
                         self.rag_queries.errors / max(self.rag_queries.count, 1) * 100,
                         2,

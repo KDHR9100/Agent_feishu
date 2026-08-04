@@ -95,3 +95,6 @@ data/reports/*
 # Temp dump files
 .tmp*
 *.tmp
+
+# Git history-rewrite leftovers
+.git-rewrite/

@@ -43,6 +43,13 @@ class TaskScheduler:
             name="每日运营日报生成",
         )
 
+        self._add_task(
+            job_id="weekly_business_report",
+            func=self._run_weekly_business_report,
+            trigger=CronTrigger(day_of_week="mon", hour=9, minute=30),
+            name="每周业务价值报告",
+        )
+
     def _add_task(self, job_id, func, trigger, name):
         self.scheduler.add_job(func, trigger=trigger, id=job_id, name=name)
         self._registered_tasks[job_id] = name
@@ -121,6 +128,25 @@ class TaskScheduler:
             )
         except Exception as e:
             logger.error("Daily report generation failed: %s", str(e), exc_info=True)
+
+    def _run_weekly_business_report(self):
+        """每周业务价值报告: 汇总活跃用户/任务量/节省工时, 落盘 data/reports/"""
+        logger.info("Running scheduled task: weekly_business_report")
+        try:
+            from datetime import datetime as _dt
+
+            from app.monitoring.business import business_metrics
+            from app.tools.file_tool import file_tool
+
+            report = business_metrics.generate_value_report(days=7)
+            file_name = "reports/business_value_report_%s.md" % _dt.now().strftime("%Y%m%d")
+            write_result = file_tool.write_file(file_name, report)
+            if write_result.get("error"):
+                logger.error("Weekly business report save failed: %s", write_result.get("error"))
+            else:
+                logger.info("Weekly business value report saved: data/%s", file_name)
+        except Exception as e:
+            logger.error("Weekly business report generation failed: %s", str(e), exc_info=True)
 
 
 task_scheduler = TaskScheduler()
