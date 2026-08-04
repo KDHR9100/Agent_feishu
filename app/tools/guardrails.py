@@ -3,7 +3,7 @@ import logging
 logger = logging.getLogger("guardrails")
 
 # Sensitive keywords that should be blocked
-BLOCKED_KEYWORDS = ['政治', '政府', '颉覆', '反动', '爆炸', '杀人', '毒品', '武器', '赌博', '诈骗', '盗版', '黑客']
+BLOCKED_KEYWORDS = ['政治', '政府', '颠覆', '反动', '爆炸', '杀人', '毒品', '武器', '赌博', '诈骗', '盗版', '黑客']
 
 # Topics that should be redirected (not blocked, just guided)
 REDIRECT_KEYWORDS = ['看病', '医疗', '股票', '基金']

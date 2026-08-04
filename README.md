@@ -9,7 +9,7 @@
 1. [系统架构](#1-系统架构)
 2. [LangGraph 工作流](#2-langgraph-工作流)
 3. [路由机制](#3-路由机制)
-4. [技能列表](#4-技能列表12-个)
+4. [技能列表](#4-技能列表13-个)
 5. [RAG 知识库系统](#5-rag-知识库系统)
 6. [Guardrails 安全防护](#6-guardrails-安全防护)
 7. [记忆系统](#7-记忆系统)
@@ -127,7 +127,7 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 
 ### 第二层：LLM Tool-Calling
 
-将 12 个技能封装为 StructuredTool，通过 llm.bind_tools(tools) 让 LLM 以 function calling 方式选择技能。支持多技能选择。超时 20 秒。
+将 13 个技能封装为 StructuredTool，通过 llm.bind_tools(tools) 让 LLM 以 function calling 方式选择技能。支持多技能选择。超时 30 秒。
 
 ### 第三层：交叉验证 + Keyword Fallback
 
@@ -272,7 +272,7 @@ LLM-as-Judge 评估（app/eval/llm_judge.py）：
 
 | 类型 | 关键词 | 动作 |
 |------|--------|------|
-| BLOCKED（拦截） | 政治、政府、反动、爆炸、杀人、毒品、武器、赌博、诈骗、盗版、黑客 | 直接返回拒绝消息 |
+| BLOCKED（拦截） | 政治、政府、颠覆、反动、爆炸、杀人、毒品、武器、赌博、诈骗、盗版、黑客 | 直接返回拒绝消息 |
 | REDIRECT（重定向） | 看病、医疗、股票、基金 | 返回引导消息 |
 | ALLOW（放行） | 其他所有输入 | 正常进入 Agent 流程 |
 
@@ -304,7 +304,7 @@ LocalMemory 双层存储架构：
 - 连接方式：lark-oapi SDK WebSocket 长连接（非 Webhook）
 - 并发模型：消息队列 queue.Queue + ThreadPoolExecutor（默认 3 worker，WS_MAX_WORKERS 可调）
 - 群聊策略：需 @bot 才响应；私聊直接处理
-- 文件消息：检查扩展名（仅 .xlsx/.xls/.csv/.pdf/.docx）-> 下载到 data/uploads/ -> 解析
+- 文件消息：检查扩展名（文档 .xlsx/.xls/.csv/.pdf/.docx，图片 .jpg/.jpeg/.png/.webp 走多模态解析）-> 下载到 data/uploads/ -> 解析
 - 消息解密：AES 解密（pycryptodome）
 - 进程管理：ws_manager 管理 WebSocket 子进程，最大重启 5 次，冷却 30 秒
 - 流式体验：收到消息立即回执"已收到，正在思考..."，路由/规划/执行各阶段推送"思考过程"进度消息
@@ -346,10 +346,10 @@ Agent_feishu/
 ├── app/
 │   ├── agent/                    # Agent 核心
 │   │   ├── router.py             # 意图路由（LLM + 关键词 + 交叉验证 + fallback）
-│   │   ├── workflow.py           # LangGraph 状态机（7 节点 + 条件边）
-│   │   └── state.py              # AgentState 定义（14 字段, MAX_RETRIES=2）
+│   │   ├── workflow.py           # LangGraph 状态机（8 节点 + 条件边）
+│   │   └── state.py              # AgentState 定义（16 字段, MAX_RETRIES=2）
 │   ├── api/
-│   │   └── feishu.py             # 飞书 Webhook + 签名验证 + AES 解密
+│   │   └── feishu.py             # 飞书路由（webhook 事件回调 / message 主动发送 / chat 对话）
 │   ├── eval/
 │   │   └── llm_judge.py          # LLM-as-Judge 评估
 │   ├── memory/
@@ -527,7 +527,9 @@ docker compose down
 | POST | /sentinel/check | L4 市场哨兵触发检查 |
 | POST | /executor/confirm/{action_id} | L4 执行器确认动作 |
 | GET | /executor/status/{action_id} | L4 执行器动作状态查询 |
-| POST | /feishu/webhook | 飞书 Webhook |
+| POST | /feishu/webhook | 飞书事件回调（url_verification + im.message.receive_v1） |
+| POST | /feishu/message | 主动发送飞书消息（chat_id + content） |
+| POST | /feishu/chat | 飞书渠道对话（直接调用 Agent 工作流） |
 
 > /chat、/rag/query、/approval 等写接口受 X-API-Key 鉴权保护（环境变量 API_KEY 配置）。**默认拒绝（fail-closed）**：未配置 API_KEY 时这些接口返回 503，配置后需携带匹配的 `X-API-Key` 请求头，避免服务在未鉴权状态下暴露。
 
@@ -545,7 +547,7 @@ docker compose down
 
 ## 16. 单元测试
 
-共 20+ 个测试文件（含 tests/integration 6 个端到端流程文件，38 个集成用例），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪等核心模块。
+共 37 个测试文件、382 个用例（含 tests/integration 6 个端到端流程文件、38 个集成用例），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪、定价/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
 
 ### 共享 Fixture（conftest.py）
 
@@ -573,10 +575,10 @@ docker compose down
 ### test_integration.py — 多模块集成（18 个测试）
 
 - TestFullWorkflowTextMessage (1): Mock LLM 执行完整 agent workflow
-- TestSkillRegistryCompleteness (3): 12 个技能注册完整性、router tools 一致性
+- TestSkillRegistryCompleteness (3): 13 个技能注册完整性、router tools 一致性
 - TestGuardrailsIntegration (4): 安全/危险/离题/空输入批量验证
 - TestMemoryPersistenceIntegration (3): 存取、会话隔离、max_history 裁剪
-- TestRouterToolBinding (2): 12 个 tools 绑定、LLM tool_call 解析
+- TestRouterToolBinding (2): 13 个 tools 绑定、LLM tool_call 解析
 - TestTicketToolCrudFlow (1): 工单完整生命周期
 - TestKeywordToolAnalysisFlow (4): 已知/未知关键词、热门词、长尾词
 - TestFileParserIntegration (3): CSV 解析、缺失文件、摘要格式
