@@ -143,3 +143,40 @@ class TestRateLimiter:
             assert rl.max_requests == 5
         finally:
             del os.environ["RATE_LIMIT_PER_MINUTE"]
+
+    def test_invalid_limit_env_fallback(self):
+        # 非法/越界配置不应导致启动崩溃, 回退默认值并夹取下限
+        import os
+        from app.utils import rate_limiter as rl_module
+
+        os.environ["RATE_LIMIT_PER_MINUTE"] = "not_a_number"
+        try:
+            assert rl_module._get_limit() == rl_module.DEFAULT_LIMIT
+        finally:
+            del os.environ["RATE_LIMIT_PER_MINUTE"]
+        os.environ["RATE_LIMIT_PER_MINUTE"] = "0"
+        try:
+            assert rl_module._get_limit() == 1
+        finally:
+            del os.environ["RATE_LIMIT_PER_MINUTE"]
+
+    def test_expired_keys_pruned(self):
+        # 完全过期的键应被定期清扫, 防止 _hits 无界增长
+        from app.utils.rate_limiter import RateLimiter
+
+        rl = RateLimiter(max_requests=2, window_seconds=1)
+        rl.allow("gone")
+        time.sleep(1.1)
+        for _ in range(RateLimiter._PRUNE_EVERY):
+            rl.allow("active")
+        assert "gone" not in rl._hits
+
+    def test_chat_rate_identity_ignores_body_fields(self):
+        # 限流身份只取决于凭据: 轮换 user_id/conversation_id 不能绕过限流
+        from app.main import _rate_limit_identity
+
+        a = _rate_limit_identity("secret", "conv1")
+        b = _rate_limit_identity("secret", "conv2")
+        assert a == b
+        assert _rate_limit_identity("other_key", "conv1") != a
+        assert _rate_limit_identity(None, "conv1").startswith("conv:")

@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
+import hashlib
 import hmac
 import time
 import os
@@ -31,6 +32,14 @@ async def require_api_key(x_api_key: Optional[str] = Header(default=None, alias=
     if not hmac.compare_digest(x_api_key or "", _API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
     return None
+
+
+def _rate_limit_identity(x_api_key: Optional[str], conversation_id: str) -> str:
+    """计算限流身份: 优先使用调用方凭据(API Key)的哈希, 不使用请求体中
+    用户可控的字段(user_id/conversation_id), 防止通过轮换字段绕过限流"""
+    if x_api_key:
+        return hashlib.sha256(x_api_key.encode("utf-8")).hexdigest()[:16]
+    return "conv:%s" % (conversation_id or "anon")
 
 
 @app.exception_handler(Exception)
@@ -105,10 +114,14 @@ async def jingang_consumption():
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest, _: None = Depends(require_api_key)):
+async def chat(
+    request: ChatRequest,
+    _: None = Depends(require_api_key),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
     # 生产流控: 按用户滑动窗口限流, 防止单用户打满 LLM 配额
     from app.utils.rate_limiter import rate_limiter
-    _rl_key = "api:%s" % (request.user_id or request.conversation_id or "anon")
+    _rl_key = "api:" + _rate_limit_identity(x_api_key, request.conversation_id)
     if not rate_limiter.allow(_rl_key):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
     try:
