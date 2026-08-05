@@ -122,3 +122,91 @@ def test_endpoint_change_pct_consistency():
     expected = (body["recommended_price"] - body["context"]["current_price"]) \
         / body["context"]["current_price"] * 100.0
     assert abs(body["change_pct"] - expected) < 0.01
+
+
+def test_target_price_override():
+    """用户明示目标价(如 降到 101)时, execution_request 以目标价为准而非沙盒最优价"""
+    from app.executor.platform_adapter import get_store_api
+    from app.skills.pricing_skill import pricing_skill
+    # 构造真降价语境: 店铺实时价 110 -> 用户要求降到 101
+    get_store_api().update_price("default_hot_item", 110.0)
+    try:
+        result = pricing_skill("帮我把爆款价格降到 101")
+    finally:
+        get_store_api().update_price("default_hot_item", 99.0)  # 还原, 避免污染其他用例
+    params = result["execution_request"]["params"]
+    assert params["new_price"] == 101.0
+    assert params["old_price"] == 110.0
+    assert "降价" in result["execution_request"]["description"]
+    assert "按您的指示" in result["data"]["analysis"]
+
+
+def test_no_target_price_keeps_optimizer_best():
+    """未明示目标价时保持原优化行为: 执行价 = 沙盒最优价"""
+    from app.skills.pricing_skill import pricing_skill
+    result = pricing_skill("帮我定个价")
+    params = result["execution_request"]["params"]
+    assert "按您的指示" not in result["data"]["analysis"]
+    assert params["new_price"] > 0
+
+
+def test_directive_percent_up():
+    """明示 '涨 10%': 按指令执行(基于店铺实时价), 不用 AI 最优价"""
+    from app.executor.platform_adapter import get_store_api
+    from app.skills.pricing_skill import pricing_skill
+    get_store_api().update_price("default_hot_item", 100.0)
+    try:
+        result = pricing_skill("帮我把爆款价格涨 10%")
+    finally:
+        get_store_api().update_price("default_hot_item", 99.0)
+    params = result["execution_request"]["params"]
+    assert params["new_price"] == 110.0
+    assert params["old_price"] == 100.0
+    assert "涨价" in result["execution_request"]["description"]
+    assert "按您的指示" in result["data"]["analysis"]
+
+
+def test_directive_percent_down():
+    """明示 '降价 5%': 按指令降价"""
+    from app.executor.platform_adapter import get_store_api
+    from app.skills.pricing_skill import pricing_skill
+    get_store_api().update_price("default_hot_item", 100.0)
+    try:
+        result = pricing_skill("爆款降价 5% 吧")
+    finally:
+        get_store_api().update_price("default_hot_item", 99.0)
+    params = result["execution_request"]["params"]
+    assert params["new_price"] == 95.0
+    assert "降价" in result["execution_request"]["description"]
+
+
+def test_directive_money_amount():
+    """明示 '加 20 元' / '便宜 10 块': 按金额调整"""
+    from app.executor.platform_adapter import get_store_api
+    from app.skills.pricing_skill import pricing_skill
+    get_store_api().update_price("default_hot_item", 100.0)
+    try:
+        r_up = pricing_skill("价格加 20 元")
+        assert r_up["execution_request"]["params"]["new_price"] == 120.0
+        r_down = pricing_skill("便宜 10 块")
+        assert r_down["execution_request"]["params"]["new_price"] == 90.0
+    finally:
+        get_store_api().update_price("default_hot_item", 99.0)
+
+
+def test_directive_target_price_beats_percent():
+    """同时含目标价与百分比时, 目标价(到 X)优先"""
+    from app.executor.platform_adapter import get_store_api
+    from app.skills.pricing_skill import pricing_skill
+    get_store_api().update_price("default_hot_item", 100.0)
+    try:
+        result = pricing_skill("涨 10%，最终调到 115")
+    finally:
+        get_store_api().update_price("default_hot_item", 99.0)
+    assert result["execution_request"]["params"]["new_price"] == 115.0
+
+
+def test_competitor_mention_not_a_directive():
+    """'竞品降价了 4%' 是市场描述不是指令, 不触发明示执行"""
+    from app.skills.pricing_skill import _parse_directive
+    assert _parse_directive("竞品降价了 4%，我们怎么办", 100.0) is None
