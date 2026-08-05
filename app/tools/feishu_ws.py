@@ -25,7 +25,13 @@ GREETING_KEYWORDS = [
     "早上好", "下午好", "晚上好", "在吗",
     "你是谁", "介绍一下", "帮助", "你能做什么",
     "你会什么", "功能", "你好呀", "在不在",
+    # 常见口语变体 (运营人员高频说法)
+    "哈喽", "嗨", "在么", "hello呀", "你好啊", "您好呀",
+    "介绍一下你", "介绍下你", "介绍你自己", "你是谁呀",
+    "你会干嘛", "能干什么", "能干啥", "会干什么", "做什么的",
+    "干什么的", "是干嘛的", "功能介绍", "功能有哪些", "有些什么功能",
 ]
+GREETING_LLM_CARD = True  # 标记: LLM 路径问候也回介绍卡片
 
 
 def _is_greeting(text: str) -> bool:
@@ -506,6 +512,15 @@ def _handle_single_message(msg):
                             if node_name == "router":
                                 skills = node_state.get("skills_to_execute", [])
                                 _cached_skills = skills
+                                # 正则外的问候/能力询问: LLM 选中 help_skill 且为短文本
+                                # -> 与正则拦截一致, 直接回自我介绍卡片, 不再跑技能出文本
+                                if GREETING_LLM_CARD and skills == ["help_skill"] \
+                                        and len((msg["content"] or "").strip()) <= 20:
+                                    logger.info("[%s] greeting via LLM route, sending card", track_id)
+                                    feishu_tool.reply_message(
+                                        msg["message_id"], _build_greeting_card(),
+                                        msg_type="interactive")
+                                    return
                                 _raw = skills[0] if skills else ""
                                 skill_label = _SKILL_CN.get(_raw, _raw) if _raw else "处理"
                                 _safe_reply(msg["message_id"], "\U0001f4ad 思考：已识别意图，将调用 [%s]" % skill_label)
