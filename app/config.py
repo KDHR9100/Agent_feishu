@@ -62,10 +62,14 @@ class Config:
         "OPENAI_MODEL_NAME", "deepseek-v4-pro"
     )
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
-    LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+    LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
     # 主 LLM 请求超时与重试: 缓解 token-plan 端点波动导致的 30s 超时
-    LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "60"))
-    LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+    # 快速失败原则: 超时短 + 少重试, 避免挂起请求叠加重试拖到分钟级
+    LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "45"))
+    LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
+    # thinking 开关: qwen3 系列默认开启思考模式会显著增加首 token 与总生成耗时;
+    # 本项目所有输出均经 strip_thinking() 剥离思考内容, 思考 token 属纯开销, 默认关闭
+    LLM_ENABLE_THINKING = os.getenv("LLM_ENABLE_THINKING", "false").lower() == "true"
 
     # ===== VLM (视觉语言模型) 配置 =====
     VLM_API_KEY = os.getenv("VLM_API_KEY", "") or os.getenv("LLM_API_KEY", "")
@@ -126,6 +130,12 @@ class Config:
     )
     # router 是分类任务, 温度设 0 保证路由稳定可复现
     ROUTER_TEMPERATURE = float(os.getenv("ROUTER_TEMPERATURE", "0"))
+    # router 只做工具选择, 必须快速失败转关键词兜底, 不允许慢重试拖住用户
+    ROUTER_REQUEST_TIMEOUT = float(os.getenv("ROUTER_REQUEST_TIMEOUT", "15"))
+    ROUTER_MAX_RETRIES = int(os.getenv("ROUTER_MAX_RETRIES", "0"))
+    ROUTER_ENABLE_THINKING = (
+        os.getenv("ROUTER_ENABLE_THINKING", "false").lower() == "true"
+    )
 
     @property
     def LLM_PROVIDER(self):
@@ -198,12 +208,17 @@ def get_router_llm():
             "Initializing Router LLM: %s (base: %s)"
             % (config.ROUTER_MODEL_NAME, config.ROUTER_API_BASE)
         )
+        # router 输出只是 tool_call(参数回显用户输入), 上限 2048 足够且不会拉长实际输出;
+        # extra_body 透传 enable_thinking 关闭思考模式 (qwen3 系列), 路由耗时可从秒级降到亚秒级
         _router_llm_instance = ChatOpenAI(
             model=config.ROUTER_MODEL_NAME,
             temperature=config.ROUTER_TEMPERATURE,
-            max_tokens=config.LLM_MAX_TOKENS,
+            max_tokens=2048,
             api_key=config.ROUTER_API_KEY,
             base_url=config.ROUTER_API_BASE,
+            timeout=config.ROUTER_REQUEST_TIMEOUT,
+            max_retries=config.ROUTER_MAX_RETRIES,
+            extra_body={"enable_thinking": config.ROUTER_ENABLE_THINKING},
             callbacks=[TokenTrackingHandler()],
         )
     return _router_llm_instance
@@ -229,6 +244,8 @@ def get_llm():
                 base_url=config.LLM_API_BASE,
                 timeout=config.LLM_REQUEST_TIMEOUT,
                 max_retries=config.LLM_MAX_RETRIES,
+                # 技能输出均经 strip_thinking() 剥离思考内容, 默认关闭思考模式以缩短生成耗时
+                extra_body={"enable_thinking": config.LLM_ENABLE_THINKING},
                 callbacks=[TokenTrackingHandler()],
             )
             logger.info("LLM initialized successfully")

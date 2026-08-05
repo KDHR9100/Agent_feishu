@@ -174,7 +174,10 @@ def test_checkpoint1_alert_message_format(capsys):
 
 def test_checkpoint2_endpoint_json_shape():
     import app.main as main_mod
+    # /optimize/pricing 已挂全站鉴权: 测试内 monkeypatch _API_KEY 并携带 X-API-Key
+    main_mod._API_KEY = "test-key"
     client = TestClient(main_mod.app)
+    client.headers.update({"X-API-Key": "test-key"})
     body = client.post("/optimize/pricing", json={"seed": 77}).json()
     for field in ["recommended_price", "confidence_interval", "simulations",
                   "loss_probability", "roi_lift_pct", "ranking"]:

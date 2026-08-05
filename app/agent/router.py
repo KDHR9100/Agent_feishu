@@ -1,5 +1,9 @@
+import hashlib
 import logging
+import os
+import threading
 import time
+from collections import OrderedDict
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -34,6 +38,51 @@ def _build_tools():
     logger.info("[router] built %d tools from manifest", len(tool_list))
     return tool_list
 
+
+# 关键词快速路径开关: 高置信唯一命中时跳过 LLM, 路由耗时≈0ms
+KEYWORD_FAST_PATH = os.getenv("ROUTER_KEYWORD_FAST_PATH", "true").lower() == "true"
+# 快速路径触发阈值: 与交叉验证的 conf>=2 保持一致的置信度语义
+KEYWORD_FAST_PATH_MIN_CONF = int(os.getenv("ROUTER_KEYWORD_FAST_PATH_MIN_CONF", "2"))
+
+# 路由结果缓存: temperature=0 下路由结果确定, 相同输入+相同会话上下文直接复用,
+# 免去飞书 webhook 重复推送/用户重发同一问题时的 LLM 调用
+ROUTER_CACHE_ENABLED = os.getenv("ROUTER_CACHE_ENABLED", "true").lower() == "true"
+ROUTER_CACHE_TTL = float(os.getenv("ROUTER_CACHE_TTL", "600"))
+ROUTER_CACHE_MAXSIZE = int(os.getenv("ROUTER_CACHE_MAXSIZE", "512"))
+
+_router_cache = OrderedDict()
+_router_cache_lock = threading.Lock()
+
+
+def _cache_key(user_input, has_file, history_text):
+    # registry 版本入 key: manifest 热更新后旧缓存自动失效
+    hist_fp = hashlib.sha1(history_text.encode("utf-8")).hexdigest()[:16] if history_text else ""
+    return (user_input.strip(), bool(has_file), skill_registry.version, hist_fp)
+
+
+def _cache_get(key):
+    if not ROUTER_CACHE_ENABLED:
+        return None
+    with _router_cache_lock:
+        item = _router_cache.get(key)
+        if not item:
+            return None
+        ts, skills = item
+        if time.time() - ts > ROUTER_CACHE_TTL:
+            _router_cache.pop(key, None)
+            return None
+        _router_cache.move_to_end(key)
+        return list(skills)
+
+
+def _cache_put(key, skills):
+    if not ROUTER_CACHE_ENABLED:
+        return
+    with _router_cache_lock:
+        _router_cache[key] = (time.time(), list(skills))
+        _router_cache.move_to_end(key)
+        while len(_router_cache) > ROUTER_CACHE_MAXSIZE:
+            _router_cache.popitem(last=False)
 
 # ============================================================
 # 热插拔缓存: 按 registry 版本号驱动, manifest 变化时自动重建
@@ -93,7 +142,7 @@ def _get_llm_with_tools():
     return _cache["llm_with_tools"]
 
 
-@timeout(30)
+@timeout(20)
 def _router_llm_call(llm_with_tools, messages):
     """带超时保护的路由 LLM 调用"""
     return llm_with_tools.invoke(messages)
@@ -176,7 +225,8 @@ def router(state):
         history_lines = []
         for msg in history[-5:]:
             role = msg.get("role", "unknown")
-            content = msg.get("content", "")
+            # 路由只需要上下文线索, 截断长消息控制路由 prompt 体积(降低 LLM 首 token 延迟)
+            content = str(msg.get("content", ""))[:200]
             if role == "user":
                 history_lines.append(f"用户: {content}")
             elif role == "assistant":
@@ -196,6 +246,46 @@ def router(state):
         SystemMessage(content=enhanced_prompt),
         HumanMessage(content=user_input),
     ]
+
+    # ── 关键词快速路径: 高置信唯一命中时跳过 LLM, 路由耗时≈0ms ──
+    # 语义与交叉验证一致(conf>=2 时关键词本就会覆盖 LLM 结果), 故可直接省去 LLM 调用;
+    # 反思重试轮(带 reflect_feedback)不走快速路径, 交给 LLM 结合反馈重新判断
+    if KEYWORD_FAST_PATH and not reflect_feedback:
+        kw_scores = _keyword_scores(user_input)
+        if kw_scores:
+            sorted_kw = sorted(kw_scores.items(), key=lambda kv: kv[1], reverse=True)
+            top_skill, top_conf = sorted_kw[0]
+            tied_at_top = len(sorted_kw) > 1 and sorted_kw[1][1] == top_conf
+            if top_conf >= KEYWORD_FAST_PATH_MIN_CONF and not tied_at_top:
+                fast_start = time.time()
+                selected_skills = [s for s, c in sorted_kw if c >= KEYWORD_FAST_PATH_MIN_CONF]
+                first_params = {"user_input": user_input}
+                if "file_analysis_skill" in selected_skills and file_path:
+                    first_params["file_path"] = file_path
+                    first_params["file_content"] = file_content
+                state["tool_result"] = {"skill": selected_skills[0], **first_params}
+                state["skills_to_execute"] = selected_skills
+                state["intent"] = selected_skills[0]
+                logger.info(
+                    "[router] keyword fast path in %.2fs -> %s (top=%s conf=%d)"
+                    % (time.time() - fast_start, selected_skills, top_skill, top_conf)
+                )
+                return state
+
+    # ── 路由缓存: temperature=0 结果确定, 相同输入+相同上下文直接复用, 省去一次 LLM 调用 ──
+    cache_key = _cache_key(user_input, file_path, history_text)
+    cached_skills = None if reflect_feedback else _cache_get(cache_key)
+    if cached_skills:
+        first_params = {"user_input": user_input}
+        if "file_analysis_skill" in cached_skills and file_path:
+            first_params["file_path"] = file_path
+            first_params["file_content"] = file_content
+        state["tool_result"] = {"skill": cached_skills[0], **first_params}
+        state["skills_to_execute"] = cached_skills
+        state["intent"] = cached_skills[0]
+        logger.info("[router] cache hit -> %s" % cached_skills)
+        return state
+
     # LLM routing with timeout + keyword fallback
     logger.info("[router] calling LLM with tools...")
     router_start = time.time()
@@ -252,6 +342,9 @@ def router(state):
         state["tool_result"] = {"skill": selected_skills[0], **first_params}
         state["skills_to_execute"] = selected_skills
         state["intent"] = selected_skills[0]
+        # 路由结果确定(temperature=0): 写入缓存供重复请求复用 (反思重试轮不写缓存)
+        if not reflect_feedback:
+            _cache_put(cache_key, selected_skills)
         logger.info(
             "[router] LLM selected %d skill(s) in %.2fs: %s"
             % (len(selected_skills), router_duration, "+".join(selected_skills))

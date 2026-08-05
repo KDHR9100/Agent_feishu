@@ -8,6 +8,10 @@ from app.utils.token_tracker import restore as _tracker_restore
 
 logger = logging.getLogger("timeout")
 
+# 共享线程池: 避免每次超时调用都创建/销毁 ThreadPoolExecutor 的开销
+# (路由/技能链路每请求会多次经过超时装饰器, 逐次建池的线程开销不可忽略)
+_SHARED_EXECUTOR = ThreadPoolExecutor(max_workers=32, thread_name_prefix="timeout-guard")
+
 
 class TimeoutException(Exception):
     pass
@@ -23,8 +27,7 @@ def timeout(seconds=30, error_message="Function call timed out"):
                 _tracker_restore(ctx)
                 return func(*args, **kwargs)
 
-            executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(_run)
+            future = _SHARED_EXECUTOR.submit(_run)
             try:
                 return future.result(timeout=seconds)
             except TimeoutError:
@@ -33,8 +36,6 @@ def timeout(seconds=30, error_message="Function call timed out"):
                     % (func.__name__, seconds)
                 )
                 raise TimeoutException(error_message)
-            finally:
-                executor.shutdown(wait=False)
 
         return wrapper
 
@@ -48,7 +49,6 @@ def async_timeout(seconds=30, error_message="Async function call timed out"):
             import asyncio
 
             loop = asyncio.get_event_loop()
-            executor = ThreadPoolExecutor(max_workers=1)
             ctx = _tracker_snapshot()
 
             def _run():
@@ -57,7 +57,7 @@ def async_timeout(seconds=30, error_message="Async function call timed out"):
 
             try:
                 return await asyncio.wait_for(
-                    loop.run_in_executor(executor, _run),
+                    loop.run_in_executor(_SHARED_EXECUTOR, _run),
                     timeout=seconds,
                 )
             except asyncio.TimeoutError:
@@ -66,8 +66,6 @@ def async_timeout(seconds=30, error_message="Async function call timed out"):
                     % (func.__name__, seconds)
                 )
                 raise TimeoutException(error_message)
-            finally:
-                executor.shutdown(wait=False)
 
         return wrapper
 

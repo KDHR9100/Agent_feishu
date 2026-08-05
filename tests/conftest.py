@@ -5,6 +5,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 测试环境禁用路由结果缓存: 保证各用例的 LLM 调用行为可被 mock 精确断言
+os.environ["ROUTER_CACHE_ENABLED"] = "false"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_database():

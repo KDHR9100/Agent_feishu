@@ -79,7 +79,7 @@ app.add_middleware(
 # ---------- L4 旁路增强: 优化器 HTTP 路由 (POST /optimize/pricing 等) ----------
 from app.optimizer.api import router as optimizer_router  # noqa: E402
 
-app.include_router(optimizer_router)
+app.include_router(optimizer_router, dependencies=[Depends(require_api_key)])
 
 
 class ChatRequest(BaseModel):
@@ -230,9 +230,20 @@ async def startup_event():
 
     try:
         logger.info("Loading workflow module...")
+        from app.agent.workflow import agent  # noqa: F401  预导入图, 避免首请求冷启动
         logger.info("Workflow module loaded successfully")
     except Exception as e:
         logger.error("Failed to load workflow module: %s" % str(e), exc_info=True)
+
+    try:
+        # 启动预热: 提前构建 Router LLM 并绑定工具, 首个用户请求不再承担初始化开销
+        logger.info("Warming up router LLM (build tools & bind)...")
+        from app.agent.router import _ensure_tools_fresh, _get_llm_with_tools
+        _ensure_tools_fresh()
+        _get_llm_with_tools()
+        logger.info("Router LLM warmed up")
+    except Exception as e:
+        logger.warning("Router warm-up failed (non-fatal): %s" % str(e))
 
     try:
         logger.info("Loading RAG retriever (this may take a moment)...")
@@ -540,3 +551,28 @@ async def action_status_endpoint(action_id: str, _: None = Depends(require_api_k
     if not entry:
         raise HTTPException(status_code=404, detail="action not found")
     return {"action_id": action_id, "entry": entry}
+
+
+# ============================================================
+# L4 可观测端点: 列出回滚窗口内的动作记录
+# (执行成功后动作仅登记在服务端内存, 此端点为运维盘点与手动验收提供 action_id)
+# ============================================================
+@app.get("/executor/pending")
+async def pending_actions_endpoint(_: None = Depends(require_api_key)):
+    """任务11 可观测: 列出所有 awaiting_confirmation 状态的动作(执行成功待人工确认)"""
+    from app.executor.rollback_manager import get_rollback_manager
+    rb = get_rollback_manager()
+    entries = []
+    for aid in rb.pending_ids():
+        e = rb.get(aid)
+        if not e:
+            continue
+        entries.append({
+            "action_id": aid,
+            "action": e.get("action"),
+            "status": e.get("status"),
+            "params": e.get("params"),
+            "old_values": e.get("old_values"),
+            "executed_at": e.get("executed_at"),
+        })
+    return {"count": len(entries), "entries": entries}

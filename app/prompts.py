@@ -38,29 +38,8 @@ ROUTER_PROMPT = """你是一个电商运营Agent的意图路由专家。你的�
 - 上传文件 -> file_analysis_skill 优先
 
 ## 示例
-用户：分析一下A商品最近的销量和趋势
--> product_skill
-
-用户：今天广告ROI怎么样，要不要追加预算
--> ads_skill
-
-用户：哪些SKU库存低于安全线了，需要补货
--> inventory_skill
-
-用户：帮我写一段防晒霜的小红书种草文案
--> content_skill
-
 用户：查一下A商品库存，如果低于100件就生成补货申请报告，并分析今天广告费要不要追加
 -> inventory_skill, report_skill, ads_skill
-
-用户：竞品的定价策略和市场表现如何
--> competitor_skill
-
-用户：我们平台满减活动的规则是什么
--> rag_skill
-
-用户：我的订单怎么还没发货，物流到哪了
--> support_skill
 
 用户：帮我把这份上传的销售Excel做成周报
 -> file_analysis_skill, report_skill
