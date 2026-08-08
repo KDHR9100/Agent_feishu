@@ -32,7 +32,8 @@ class RAGRetriever:
             if not results:
                 logger.warning("No results from vector store, direct LLM response")
                 result = self.llm.invoke(query)
-                return {"answer": str(result), "retrieved_docs": [], "from_cache": False}
+                _text = getattr(result, "content", None) or str(result)
+                return {"answer": _text, "retrieved_docs": [], "from_cache": False}
 
             context = "\n\n".join(results)
 
@@ -48,7 +49,7 @@ Answer:""" % (context, query)
             result = self.llm.invoke(prompt)
 
             # Extract text after </think> if present
-            answer = str(result)
+            answer = getattr(result, "content", None) or str(result)
             if "</think>" in answer:
                 answer = answer.rsplit("</think>", 1)[-1].strip()
 

@@ -591,7 +591,7 @@ def _handle_single_message(msg):
         # ---------- 回复消息 ----------
         try:
             feishu_tool.reply_message(msg["message_id"], answer)
-            logger.info("[Feishu WS] [%s] Reply sent", track_id)
+            logger.info("[Feishu WS] [%s] Reply sent, answer:\n%s", track_id, answer)
         except Exception as e:
             logger.error("[Feishu WS] [%s] Reply failed: %s", track_id, str(e))
 

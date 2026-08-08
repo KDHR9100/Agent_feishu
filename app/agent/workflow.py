@@ -399,6 +399,20 @@ def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_
                 )
                 return {"type": "error", "data": "技能 %s 执行出错, 请稍后重试。" % skill_name}
         if isinstance(result, dict) and result.get("is_executable") and result.get("execution_request"):
+            # R2: plan-execute 模式下步骤输入被规划器改写, 咨询信号 ("要不要跟进降价?")
+            # 在技能内部可能丢失; 用原始 user_input 复查 —— 咨询问句只看分析, 不进审批闭环
+            from app.skills.pricing_skill import is_consultative
+            if is_consultative(state.get("user_input", "")):
+                logger.info(
+                    "[skill_executor] consultative query, %s downgraded to analysis-only"
+                    % skill_name
+                )
+                return {
+                    "type": "analysis",
+                    "data": result.get("data", {}),
+                    "is_executable": False,
+                    "execution_request": None,
+                }
             from app.executor.action_verifier import get_action_verifier
             verify_result = get_action_verifier().verify_and_execute(
                 result["execution_request"],
@@ -562,7 +576,7 @@ def skill_executor(state):
             get_conflict_resolver,
             is_conflicted,
         )
-        if is_conflicted(detect_conflicts(_raw_input)):
+        if is_conflicted(detect_conflicts(_raw_input), _raw_input):
             decision = get_conflict_resolver().resolve(
                 _raw_input, conversation_id=state.get("conversation_id", ""))
             logger.warning(
@@ -837,6 +851,22 @@ def _extract_text_from_result(result_obj):
     return strip_thinking(text) or str(result_obj)
 
 
+_APPROVAL_FOLLOWUP_MARKS = ("审批", "批准", "批复", "通过了吗", "执行了没")
+
+
+def _approval_followup_context(state) -> str:
+    """P6: 用户在追问审批进展时返回最近审批记录摘要; 否则返回空串。
+    避免审批被拒/已执行后仍回答"等待审批中", 或推说"查不到进度"。"""
+    user_input = state.get("user_input", "") or ""
+    if not any(m in user_input for m in _APPROVAL_FOLLOWUP_MARKS):
+        return ""
+    try:
+        from app.utils.approval import recent_approval_summary
+        return recent_approval_summary(state.get("conversation_id", ""))
+    except Exception:
+        return ""
+
+
 @trace_node("answer")
 def answer_node(state):
     results = state.get("skill_results") or []
@@ -844,7 +874,13 @@ def answer_node(state):
     if len(results) <= 1:
         single = results[0]["result"] if results else state.get("tool_result")
         answer_text = _extract_text_from_result(single)
-        state["answer"] = strip_thinking(answer_text) or str(single)
+        answer = strip_thinking(answer_text) or str(single)
+        # P6: 追问审批状态时附上真实审批记录 (新发起的审批卡片响应不重复附加)
+        if not (isinstance(single, dict) and single.get("type") == "approval_required"):
+            approval_ctx = _approval_followup_context(state)
+            if approval_ctx:
+                answer = approval_ctx + "\n\n" + answer
+        state["answer"] = answer
         return state
 
     user_input = state.get("user_input", "")
@@ -859,6 +895,10 @@ def answer_node(state):
     history_context = ""
     if history_summary:
         history_context = f"[历史对话摘要]\n{history_summary}\n\n"
+    # P6: 追问审批状态时把真实审批记录注入综合上下文
+    approval_ctx = _approval_followup_context(state)
+    if approval_ctx:
+        history_context += "[审批状态]\n%s\n\n" % approval_ctx
 
     prompt = SUMMARIZATION_PROMPT_TEMPLATE.format(
         user_input=user_input[:500],

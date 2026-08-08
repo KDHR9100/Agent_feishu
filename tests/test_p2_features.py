@@ -168,9 +168,11 @@ class TestApprovalManager:
         # 总开关关闭时不拦截 (显式 patch, 不依赖 .env 实际取值)
         with patch.object(approval, "APPROVAL_ENABLED", False):
             assert approval.should_gate("product_skill", "帮我降价到99元") is False
-        # 总开关打开时, 含高危关键词的指令命中审批门, 普通查询不命中
+        # 总开关打开时, 高危关键词仅对可执行(写操作)技能命中审批门 (P1 修复);
+        # product_skill 等纯分析技能即使命中关键词也不 gate, 普通查询不命中
         with patch.object(approval, "APPROVAL_ENABLED", True):
-            assert approval.should_gate("product_skill", "帮我降价到99元") is True
+            assert approval.should_gate("product_skill", "帮我降价到99元") is False
+            assert approval.should_gate("pricing_skill", "帮我降价到99元") is True
             assert approval.should_gate("product_skill", "分析一下销量") is False
 
     def test_skill_markers(self):

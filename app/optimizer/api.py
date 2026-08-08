@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config import OPTIMIZER_CONFIG
@@ -25,9 +25,21 @@ class PricingRequest(BaseModel):
     refine: bool = True
 
 
+def _validate_positive_fields(req: PricingRequest):
+    """P4: 显式传入的数值字段必须为正 —— 负价格/负库存不是合法输入, 直接 422 拒绝"""
+    for field in ("current_price", "competitor_price", "inventory", "ad_budget"):
+        value = getattr(req, field)
+        if value is not None and value <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="%s 必须大于 0，收到非法值 %s（价格/数量不支持负数或零）" % (field, value),
+            )
+
+
 @router.post("/pricing")
 def optimize_pricing_endpoint(req: PricingRequest):
     """Checkpoint 2 验收接口: 返回带模拟置信区间的最优定价 JSON"""
+    _validate_positive_fields(req)
     cfg = OPTIMIZER_CONFIG
     ctx = {
         "current_price": req.current_price or cfg["default_price"],

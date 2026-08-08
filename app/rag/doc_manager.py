@@ -512,6 +512,11 @@ class DocVectorManager:
         try:
             if self.hybrid_searcher is None:
                 return
+            # FAISS 索引为懒加载 (首次搜索才触发 initialize), 若此处尚未就绪
+            # 则显式初始化, 否则 BM25 索引会因取不到 docstore 而永久缺失,
+            # 混合检索将退化为纯向量搜索
+            if self.vector_store.vector_store is None:
+                self.vector_store.initialize()
             if self.vector_store.vector_store is None:
                 return
             # 从 FAISS 索引的 docstore 中提取文档

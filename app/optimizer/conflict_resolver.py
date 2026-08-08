@@ -12,6 +12,7 @@
 5. 用户点选后才调用执行器 (apply_choice -> verify_and_execute)
 """
 import logging
+import re
 import threading
 import uuid
 
@@ -38,6 +39,23 @@ GOAL_LABELS = {
 # 触发仲裁的最小冲突目标数 (指令: 超过 2 个相互冲突的指标)
 CONFLICT_MIN_GOALS = 3
 
+# P5: 恰好 2 个目标时的显式冲突句式 —— 用户明确要求两者兼得/同时极值, 本质上不可同时满足
+# 仅认强并列句式 (既要X又要Y / 都要 / 兼顾), 避免 "...的同时" 等描述性语句误触发
+_CONFLICT_CONNECTIVE_RE = re.compile(
+    r"[既又][是要想]?.{0,16}[又也还][是要想]?"
+    r"|都[要得想]"
+    r"|兼顾"
+)
+# 极值词: 要求目标达到极端 (利润/销量 最大化 等)
+_CONFLICT_MAXIMIZER_RE = re.compile(r"最大化|拉满|都做到最好")
+
+
+def _explicit_two_goal_conflict(user_input):
+    """2 个目标 + 显式并列/极值句式 → 判定为冲突 (P5)"""
+    text = user_input or ""
+    return bool(_CONFLICT_CONNECTIVE_RE.search(text)
+                or _CONFLICT_MAXIMIZER_RE.search(text))
+
 
 def detect_conflicts(user_input):
     """从用户输入中识别冲突目标, 返回匹配到的目标名列表"""
@@ -49,8 +67,15 @@ def detect_conflicts(user_input):
     return goals
 
 
-def is_conflicted(goals):
-    return len(goals) >= CONFLICT_MIN_GOALS
+def is_conflicted(goals, user_input=""):
+    """冲突判定: >=3 个目标必然冲突;
+    恰好 2 个目标时, 仅当原文含显式并列/极值句式才判为冲突 (P5)。
+    user_input 为可选参数, 旧调用签名完全兼容。"""
+    if len(goals) >= CONFLICT_MIN_GOALS:
+        return True
+    if len(goals) == 2 and user_input:
+        return _explicit_two_goal_conflict(user_input)
+    return False
 
 
 def normalize_scores(values):
@@ -210,7 +235,7 @@ class ConflictResolver:
         conversation_id 记入会话, 供用户点选后回推执行回执。
         """
         goals = detect_conflicts(user_input)
-        if not is_conflicted(goals):
+        if not is_conflicted(goals, user_input):
             return {"type": "no_conflict", "data": {"goals": goals}}
 
         cfg = OPTIMIZER_CONFIG
