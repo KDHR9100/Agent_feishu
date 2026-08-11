@@ -7,13 +7,17 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
 from .state import AgentState, MAX_RETRIES
 from .router import router
-from app.memory.local_memory import local_memory
-from app.config import get_llm
+from app.memory.local_memory import local_memory, compact_messages
+from app.memory.persistent_memory import get_memory_index, get_relevant_memories, try_save_from_input
+from app.config import get_llm, get_fallback_llm
 from app.utils.timeout import timeout
 from app.utils.tracing import trace_node
 from app.monitoring import monitoring_stats
 from app.utils.security import detect_injection, SAFE_BLOCK_RESPONSE
 from app.utils.token_tracker import track_as
+from app.utils.llm_retry import invoke_with_recovery
+from app.utils.hooks import trigger_hooks, register_hook
+from app.utils.todo_manager import create_todo, update_status, format_progress, check_stale, mark_updated, all_completed
 
 logger = logging.getLogger("workflow")
 
@@ -37,10 +41,24 @@ def load_history(state):
     summary, recent = local_memory.get_context(conversation_id, n=30)
     state["history"] = recent
     state["history_summary"] = summary
+    # s09: 持久记忆 - 尝试从用户输入提取并保存记忆
+    user_input = state.get("user_input", "")
+    if user_input:
+        try:
+            saved = try_save_from_input(user_input)
+            if saved:
+                logger.info("[load_history] memory saved: %s" % saved.get("name", ""))
+        except Exception as e:
+            logger.debug("[load_history] memory extract failed: %s" % e)
     logger.info(
         "[load_history] conversation_id=%s, messages_loaded=%d, has_summary=%s"
         % (conversation_id, len(recent), summary is not None)
     )
+    # s04: UserPromptSubmit hook
+    trigger_hooks("UserPromptSubmit", {
+        "user_input": state.get("user_input", ""),
+        "conversation_id": conversation_id,
+    })
     return state
 
 
@@ -94,7 +112,12 @@ def load_file(state):
 
 @timeout(30)
 def _call_llm(llm, messages):
-    return llm.invoke(messages)
+    """带错误恢复的 LLM 调用"""
+    return invoke_with_recovery(
+        llm, messages,
+        on_context_overflow=compact_messages,
+        fallback_llm=get_fallback_llm(),
+    )
 
 
 # ============================================================
@@ -132,7 +155,12 @@ PLANNER_PROMPT_TEMPLATE = """你是一个电商运营Agent的任务规划专家�
 # 避免因 30s 通用超时误杀导致退化为无依赖的顺序模式
 @timeout(45)
 def _planner_llm_call(llm, messages):
-    return llm.invoke(messages)
+    """planner 专用: 带错误恢复"""
+    return invoke_with_recovery(
+        llm, messages,
+        on_context_overflow=compact_messages,
+        fallback_llm=get_fallback_llm(),
+    )
 
 
 @trace_node("planner")
@@ -326,6 +354,21 @@ def _run_unknown_skill(state, user_input):
     history_summary = state.get("history_summary")
     if history_summary:
         system_content += f"\n\n[历史对话摘要]\n{history_summary}"
+    # s09: 注入持久记忆索引
+    try:
+        memory_index = get_memory_index()
+        if memory_index and memory_index.strip() != "(no memories yet)":
+            system_content += f"\n\n[用户记忆]\n{memory_index}"
+    except Exception:
+        pass
+    # s09: 注入相关记忆
+    try:
+        relevant = get_relevant_memories(user_input)
+        if relevant:
+            mem_text = "\n".join("- %s: %s" % (m.get("name", ""), m.get("description", "")) for m in relevant)
+            system_content += f"\n\n[相关记忆]\n{mem_text}"
+    except Exception:
+        pass
 
     system_msg = SystemMessage(content=system_content)
     messages = [system_msg]
@@ -595,6 +638,9 @@ def skill_executor(state):
             "[skill_executor] plan-execute mode, %d steps: %s"
             % (len(execution_plan), [s["skill"] for s in execution_plan])
         )
+        # s05: 从执行计划创建 todo 列表
+        state["todo_list"] = create_todo([s.get("skill", "step") for s in execution_plan])
+        mark_updated(state)
         prev_output = None
         for idx, step in enumerate(execution_plan, 1):
             skill_name = step.get("skill", "unknown")
@@ -619,10 +665,26 @@ def skill_executor(state):
                 "[skill_executor] plan step (%d/%d) skill=%s"
                 % (idx, len(execution_plan), skill_name)
             )
+            # s04: PreToolUse hook
+            trigger_hooks("PreToolUse", {
+                "skill_name": skill_name,
+                "user_input": step_input,
+                "conversation_id": state.get("conversation_id", ""),
+            })
             result = _execute_single_skill(
                 skill_name, step_input, file_path, file_content, tool_result, state
             )
             results.append({"skill": skill_name, "result": result})
+            # s04: PostToolUse hook
+            trigger_hooks("PostToolUse", {
+                "skill_name": skill_name,
+                "result": result,
+                "conversation_id": state.get("conversation_id", ""),
+            })
+            # s05: 更新 todo 状态
+            if state.get("todo_list") and idx - 1 < len(state["todo_list"]):
+                update_status(state["todo_list"], idx - 1, "completed")
+                mark_updated(state)
 
             # 缓存中间结果供下一步使用 (剔除 user_input 回显, 防止污染传递)
             if isinstance(result, dict):
@@ -706,12 +768,22 @@ REFLECT_PROMPT_TEMPLATE = """你是一个电商运营Agent的回答质量审查�
 
 @timeout(20)
 def _reflect_llm_call(llm, messages):
-    return llm.invoke(messages)
+    """reflect 专用: 带错误恢复"""
+    return invoke_with_recovery(
+        llm, messages,
+        on_context_overflow=compact_messages,
+        fallback_llm=get_fallback_llm(),
+    )
 
 
 @trace_node("reflect")
 def reflect(state):
     skills = state.get("skills_to_execute") or []
+    # s05: 检查 todo 是否过期未更新
+    stale_msg = check_stale(state)
+    if stale_msg:
+        logger.info("[reflect] todo stale: %s" % stale_msg)
+        state["reflect_feedback"] = (state.get("reflect_feedback") or "") + "\n" + stale_msg
 
     if state.get("intent") == "injection_blocked":
         logger.info("[reflect] injection_blocked, skipping reflection")
@@ -870,6 +942,8 @@ def _approval_followup_context(state) -> str:
 @trace_node("answer")
 def answer_node(state):
     results = state.get("skill_results") or []
+    # s05: 如果有 todo 列表, 追加进度展示
+    todo_progress = format_progress(state.get("todo_list"))
 
     if len(results) <= 1:
         single = results[0]["result"] if results else state.get("tool_result")

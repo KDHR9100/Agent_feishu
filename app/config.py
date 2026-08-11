@@ -137,6 +137,11 @@ class Config:
         os.getenv("ROUTER_ENABLE_THINKING", "false").lower() == "true"
     )
 
+    # ===== 备用模型 (s11) =====
+    LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "")
+    LLM_FALLBACK_API_KEY = os.getenv("LLM_FALLBACK_API_KEY", "") or os.getenv("LLM_API_KEY", "")
+    LLM_FALLBACK_API_BASE = os.getenv("LLM_FALLBACK_API_BASE", "") or os.getenv("LLM_API_BASE", "")
+
     @property
     def LLM_PROVIDER(self):
         explicit = os.getenv("LLM_PROVIDER", "")
@@ -195,6 +200,7 @@ EXECUTOR_REAL_MODE = os.getenv("EXECUTOR_REAL_MODE", "false").lower() == "true"
 
 _llm_instance = None
 _router_llm_instance = None
+_fallback_llm_instance = None
 
 
 def get_router_llm():
@@ -253,6 +259,33 @@ def get_llm():
             logger.error("Failed to initialize LLM: %s" % str(e))
             raise
     return _llm_instance
+def get_fallback_llm():
+    """备用 LLM: 主模型连续失败时由 invoke_with_recovery 自动切换。
+    未配置 LLM_FALLBACK_MODEL 时返回 None。"""
+    global _fallback_llm_instance
+    if _fallback_llm_instance is None:
+        if not config.LLM_FALLBACK_MODEL:
+            return None
+        from langchain_openai import ChatOpenAI
+        from app.utils.token_tracker import TokenTrackingHandler
+        logger.info("Initializing Fallback LLM: %s" % config.LLM_FALLBACK_MODEL)
+        try:
+            _fallback_llm_instance = ChatOpenAI(
+                model=config.LLM_FALLBACK_MODEL,
+                temperature=config.LLM_TEMPERATURE,
+                max_tokens=config.LLM_MAX_TOKENS,
+                api_key=config.LLM_FALLBACK_API_KEY,
+                base_url=config.LLM_FALLBACK_API_BASE,
+                timeout=config.LLM_REQUEST_TIMEOUT,
+                max_retries=0,
+                extra_body={"enable_thinking": config.LLM_ENABLE_THINKING},
+                callbacks=[TokenTrackingHandler()],
+            )
+            logger.info("Fallback LLM initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize Fallback LLM: %s" % str(e))
+            return None
+    return _fallback_llm_instance
 
 
 def get_embeddings():

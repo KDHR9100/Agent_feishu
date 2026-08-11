@@ -213,6 +213,13 @@ async def startup_event():
 
     logger.info("Loading dependencies...")
 
+    # s04: 注册默认审计 hook
+    try:
+        from app.utils.default_hooks import register_default_hooks
+        register_default_hooks()
+    except Exception as e:
+        logger.warning("Failed to register default hooks: %s" % e)
+
     try:
         logger.info("Initializing database...")
         from app.models import init_db

@@ -20,6 +20,9 @@ class AgentState(TypedDict, total=False):
     history_summary: Optional[str]
     # ===== Plan-Execute 新增 =====
     execution_plan: Optional[List[dict]]  # planner 输出的顺序执行计划
+    # ===== s05 TodoWrite =====
+    todo_list: Optional[List[dict]]
+    todo_last_updated_round: Optional[int]
 
 
 # ReAct 循环最大重试次数(防止 LLM 抖动导致死循环)

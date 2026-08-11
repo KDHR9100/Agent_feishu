@@ -12,6 +12,55 @@ RECENT_KEEP_COUNT = 30
 # P10: 历史超出最近窗口且无摘要时, 把最早的 N 条消息提炼为锚定摘要 (用户最初的问题陈述)
 ANCHOR_KEEP_COUNT = 4
 
+# ===== s08: token 粗估与应急裁剪 (无需 tiktoken) =====
+CHARS_PER_TOKEN = 2.5
+COMPACT_MAX_TOKENS = 6000
+
+
+def estimate_tokens(text):
+    """粗估文本 token 数"""
+    if not text:
+        return 0
+    return int(len(text) / CHARS_PER_TOKEN) + 1
+
+
+def estimate_messages_tokens(messages):
+    """估算消息列表总 token 数 (支持 LangChain Message 和 dict)"""
+    total = 0
+    for msg in messages:
+        content = ""
+        if isinstance(msg, dict):
+            content = msg.get("content", "")
+        elif hasattr(msg, "content"):
+            content = msg.content or ""
+        else:
+            content = str(msg)
+        total += estimate_tokens(str(content))
+        total += 4
+    return total
+
+
+def compact_messages(messages, max_tokens=COMPACT_MAX_TOKENS):
+    """应急裁剪: 保留头尾, 中间用占位符替代"""
+    if not messages:
+        return messages
+    total = estimate_messages_tokens(messages)
+    if total <= max_tokens:
+        return messages
+    from langchain_core.messages import SystemMessage as _SysMsg
+    head_keep = min(4, len(messages))
+    tail_keep = min(RECENT_KEEP_COUNT, len(messages) - head_keep)
+    if head_keep + tail_keep >= len(messages):
+        return list(messages[-tail_keep:])
+    head = list(messages[:head_keep])
+    tail = list(messages[-tail_keep:])
+    omitted = len(messages) - head_keep - tail_keep
+    placeholder = _SysMsg(
+        content="[...已省略 %d 条历史对话以控制上下文长度...]" % omitted
+    )
+    return head + [placeholder] + tail
+
+
 
 class LocalMemory:
     def __init__(self, max_history: int = 60, max_conversations: int = 1000):
@@ -200,13 +249,12 @@ class LocalMemory:
         self._touch(conversation_id)
         self._save_to_db(conversation_id, role, content)
 
-        # 超过阈值时触发摘要压缩
-        if len(self.conversations[conversation_id]) > SUMMARIZE_THRESHOLD:
-            self._summarize_old_messages(conversation_id)
-
+        # s08: 压缩顺序修正 - 免费裁剪先跑, LLM 摘要后跑
         if len(self.conversations[conversation_id]) > self.max_history:
             self.conversations[conversation_id] = self.conversations[conversation_id][-self.max_history:]
             self._trim_db(conversation_id)
+        if len(self.conversations[conversation_id]) > SUMMARIZE_THRESHOLD:
+            self._summarize_old_messages(conversation_id)
 
     def get_history(self, conversation_id: str) -> List[Dict]:
         if conversation_id not in self.conversations:
