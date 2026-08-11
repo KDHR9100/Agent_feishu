@@ -100,3 +100,23 @@ data/reports/*
 # Git history-rewrite leftovers
 .git-rewrite/
 (1) 电商运营场景问题模拟以及修复.md
+
+# ============================================================
+# 补充排除规则 (预上传安全检查)
+# ============================================================
+
+# Local agent memory (用户反馈/记忆，私密，严禁提交)
+.memory/
+
+# Environment backups
+.env.bak
+*.bak
+
+# Internal reports (测试报告/修复总结等内部文档，非源码)
+test_report_*.md
+修复总结报告_*.md
+*_修复报告.md
+
+# Misnamed scripts accidentally created at repo root (含反斜杠路径的误创建文件)
+[Cc]:[\]temp[\]*.py
+*setup_batch*.py
