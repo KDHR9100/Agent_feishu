@@ -85,6 +85,10 @@ feishu_tool.reply_message() --- 回复用户
 | 业务度量 | BusinessTaskLog | 按用户记录任务（user_id/技能/成败/耗时），/metrics/business 输出活跃用户、成功率与节省工时估算 |
 | 流量防护 | 滑动窗口限流 | 按用户 RATE_LIMIT_PER_MINUTE 限流，/chat 返回 429，飞书入口友好提示 |
 | 多模态 | VLM | 图片解析为结构化表格（file_analysis_skill） |
+| LLM 容错 | invoke_with_recovery | 上下文超限裁剪重试 + 限流指数退避 + 备用模型自动切换 |
+| 持久记忆 | persistent_memory | 从用户输入提取长期记忆，注入 system prompt 增强个性化 |
+| Hooks | hooks.py | PreToolUse / PostToolUse / UserPromptSubmit 生命周期钩子 |
+| 路由加速 | 关键词快速路径 + 结果缓存 | 高置信关键词命中跳过 LLM（≈0ms），temperature=0 路由结果缓存复用 |
 
 ---
 
@@ -111,9 +115,9 @@ feishu_tool.reply_message() --- 回复用户
 - 防死循环：retry_count >= MAX_RETRIES (2) 时强制 sufficient
 - 容错：reflect LLM 超时 20 秒，异常时 fail-open 为 sufficient
 
-### AgentState 定义（16 个字段）
+### AgentState 定义（18 个字段）
 
-user_input, conversation_id, history, tool_result, answer, intent, token_usage, file_path, file_content, skills_to_execute, skill_results, retry_count, reflect_feedback, reflect_decision, history_summary, execution_plan
+user_input, conversation_id, history, tool_result, answer, intent, token_usage, file_path, file_content, skills_to_execute, skill_results, retry_count, reflect_feedback, reflect_decision, history_summary, execution_plan, todo_list, todo_last_updated_round
 
 ---
 
@@ -134,6 +138,11 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 - 交叉验证：LLM 选择后，用关键词评分验证。若关键词最高分技能与 LLM 不同且置信度 >= 2，则关键词结果优先。
 - Keyword Fallback：LLM 调用超时或异常时，使用 KEYWORD_RULES 进行关键词匹配。
 - 最终 Fallback：关键词也无匹配 -> intent = "unknown" -> LLM 闲聊兜底。
+
+### 性能优化
+
+- **关键词快速路径**：高置信关键词唯一命中（conf >= 2 且无并列）时跳过 LLM，路由耗时 ≈ 0ms。反思重试轮不走快速路径。
+- **路由结果缓存**：temperature=0 下路由结果确定性保证，相同输入+相同会话上下文直接复用缓存（TTL 600s，MAXSIZE 512）。manifest 版本纳入缓存 key，热更新后旧缓存自动失效。
 
 ### 动态热插拔（MCP manifest）
 
@@ -347,13 +356,14 @@ Agent_feishu/
 │   ├── agent/                    # Agent 核心
 │   │   ├── router.py             # 意图路由（LLM + 关键词 + 交叉验证 + fallback）
 │   │   ├── workflow.py           # LangGraph 状态机（8 节点 + 条件边）
-│   │   └── state.py              # AgentState 定义（16 字段, MAX_RETRIES=2）
+│   │   └── state.py              # AgentState 定义（18 字段, MAX_RETRIES=2）
 │   ├── api/
 │   │   └── feishu.py             # 飞书路由（webhook 事件回调 / message 主动发送 / chat 对话）
 │   ├── eval/
 │   │   └── llm_judge.py          # LLM-as-Judge 评估
 │   ├── memory/
-│   │   └── local_memory.py       # 双层记忆（内存 LRU + SQLite 持久化）
+│   │   ├── local_memory.py       # 双层记忆（内存 LRU + SQLite 持久化）
+│   │   └── persistent_memory.py  # 持久记忆（从用户输入提取长期记忆 + 检索注入）
 │   ├── models/
 │   │   ├── database.py           # SQLAlchemy 引擎
 │   │   └── models.py             # ProductSale, AdsPerformance, BusinessTaskLog 数据模型
@@ -400,9 +410,14 @@ Agent_feishu/
 │   │   ├── token_tracker.py      # Token 归属记账（thread-local + LangChain 回调）
 │   │   ├── approval.py           # 审批管理器（高危关键词门控 + 挂起执行）
 │   │   ├── action_log.py         # 审批动作日志（SQLite）
-│   │   ├── security.py           # API 鉴权
+│   │   ├── security.py           # API 鉴权 + 注入检测
 │   │   ├── tracing.py            # 节点耗时追踪
-│   │   └── rate_limiter.py       # 滑动窗口限流器（每用户每分钟阈值）
+│   │   ├── rate_limiter.py       # 滑动窗口限流器（每用户每分钟阈值）
+│   │   ├── llm_retry.py          # LLM 调用错误恢复（分类+退避+备用模型切换）
+│   │   ├── hooks.py              # 生命周期钩子（PreToolUse/PostToolUse/UserPromptSubmit）
+│   │   ├── default_hooks.py      # 默认钩子注册
+│   │   ├── todo_manager.py       # Plan-Execute 任务进度追踪
+│   │   └── background_tasks.py   # 后台任务管理
 │   ├── config.py                 # 配置管理（环境变量）
 │   ├── prompts.py                # Prompt 模板
 │   └── main.py                   # FastAPI 入口
@@ -689,6 +704,13 @@ GitHub Actions（.github/workflows/ci.yml）：
 | 审批操作者白名单 | APPROVAL_OPERATORS | "" | 飞书 open_id 逗号分隔；启用审批门时必填，仅名单内用户可批准/拒绝/点选决策 |
 | 每用户限流 | RATE_LIMIT_PER_MINUTE | 30 | 滑动窗口限流（次/分钟），/chat 与飞书入口生效，超限返回 429/提示 |
 | 真实执行模式 | EXECUTOR_REAL_MODE | false | true 时执行器对接真实店铺平台（当前适配器为预留实现） |
+| Thinking 模式 | LLM_ENABLE_THINKING | false | 是否开启 LLM 思考模式（默认关闭，输出经 strip_thinking 剥离） |
+| 备用模型 | LLM_FALLBACK_MODEL | "" | 主模型连续失败时自动切换的备用模型名（不配置则不启用） |
+| 备用模型密钥 | LLM_FALLBACK_API_KEY/BASE | 复用 LLM_* | 备用模型的 API 密钥和地址 |
+| 路由缓存 | ROUTER_CACHE_ENABLED | true | temperature=0 路由结果缓存开关（TTL 600s, MAXSIZE 512） |
+| 关键词快速路径 | ROUTER_KEYWORD_FAST_PATH | true | 高置信关键词命中时跳过 LLM（conf>=2 唯一命中触发） |
+| LLM 请求超时 | LLM_REQUEST_TIMEOUT | 45 | 主 LLM 单次请求超时秒数 |
+| LLM 最大重试 | LLM_MAX_RETRIES | 1 | 主 LLM 请求失败重试次数 |
 
 ---
 
