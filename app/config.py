@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
 import logging
+import threading
 from logging.config import dictConfig
 
 load_dotenv()
@@ -201,64 +202,70 @@ EXECUTOR_REAL_MODE = os.getenv("EXECUTOR_REAL_MODE", "false").lower() == "true"
 _llm_instance = None
 _router_llm_instance = None
 _fallback_llm_instance = None
+_llm_lock = threading.Lock()
 
 
 def get_router_llm():
     """Task routing dedicated LLM: fast small model, independent key/base configurable via env"""
     global _router_llm_instance
     if _router_llm_instance is None:
-        from langchain_openai import ChatOpenAI
-        from app.utils.token_tracker import TokenTrackingHandler
+        with _llm_lock:
+            if _router_llm_instance is not None:
+                return _router_llm_instance
+            from langchain_openai import ChatOpenAI
+            from app.utils.token_tracker import TokenTrackingHandler
 
-        logger.info(
-            "Initializing Router LLM: %s (base: %s)"
-            % (config.ROUTER_MODEL_NAME, config.ROUTER_API_BASE)
-        )
-        # router 输出只是 tool_call(参数回显用户输入), 上限 2048 足够且不会拉长实际输出;
-        # extra_body 透传 enable_thinking 关闭思考模式 (qwen3 系列), 路由耗时可从秒级降到亚秒级
-        _router_llm_instance = ChatOpenAI(
-            model=config.ROUTER_MODEL_NAME,
-            temperature=config.ROUTER_TEMPERATURE,
-            max_tokens=2048,
-            api_key=config.ROUTER_API_KEY,
-            base_url=config.ROUTER_API_BASE,
-            timeout=config.ROUTER_REQUEST_TIMEOUT,
-            max_retries=config.ROUTER_MAX_RETRIES,
-            extra_body={"enable_thinking": config.ROUTER_ENABLE_THINKING},
-            callbacks=[TokenTrackingHandler()],
-        )
+            logger.info(
+                "Initializing Router LLM: %s (base: %s)"
+                % (config.ROUTER_MODEL_NAME, config.ROUTER_API_BASE)
+            )
+            _router_llm_instance = ChatOpenAI(
+                model=config.ROUTER_MODEL_NAME,
+                temperature=config.ROUTER_TEMPERATURE,
+                max_tokens=2048,
+                api_key=config.ROUTER_API_KEY,
+                base_url=config.ROUTER_API_BASE,
+                timeout=config.ROUTER_REQUEST_TIMEOUT,
+                max_retries=config.ROUTER_MAX_RETRIES,
+                extra_body={"enable_thinking": config.ROUTER_ENABLE_THINKING},
+                callbacks=[TokenTrackingHandler()],
+            )
     return _router_llm_instance
 
 
 def get_llm():
     global _llm_instance
     if _llm_instance is None:
-        from langchain_openai import ChatOpenAI
-        from app.utils.token_tracker import TokenTrackingHandler
+        with _llm_lock:
+            if _llm_instance is not None:
+                return _llm_instance
+            from langchain_openai import ChatOpenAI
+            from app.utils.token_tracker import TokenTrackingHandler
 
-        logger.info(
-            "Initializing LLM: %s (Provider: %s)"
-            % (config.LLM_MODEL_NAME, config.LLM_PROVIDER)
-        )
-        logger.info("API Base: %s" % config.LLM_API_BASE)
-        try:
-            _llm_instance = ChatOpenAI(
-                model=config.LLM_MODEL_NAME,
-                temperature=config.LLM_TEMPERATURE,
-                max_tokens=config.LLM_MAX_TOKENS,
-                api_key=config.LLM_API_KEY,
-                base_url=config.LLM_API_BASE,
-                timeout=config.LLM_REQUEST_TIMEOUT,
-                max_retries=config.LLM_MAX_RETRIES,
-                # 技能输出均经 strip_thinking() 剥离思考内容, 默认关闭思考模式以缩短生成耗时
-                extra_body={"enable_thinking": config.LLM_ENABLE_THINKING},
-                callbacks=[TokenTrackingHandler()],
+            logger.info(
+                "Initializing LLM: %s (Provider: %s)"
+                % (config.LLM_MODEL_NAME, config.LLM_PROVIDER)
             )
-            logger.info("LLM initialized successfully")
-        except Exception as e:
-            logger.error("Failed to initialize LLM: %s" % str(e))
-            raise
+            logger.info("API Base: %s" % config.LLM_API_BASE)
+            try:
+                _llm_instance = ChatOpenAI(
+                    model=config.LLM_MODEL_NAME,
+                    temperature=config.LLM_TEMPERATURE,
+                    max_tokens=config.LLM_MAX_TOKENS,
+                    api_key=config.LLM_API_KEY,
+                    base_url=config.LLM_API_BASE,
+                    timeout=config.LLM_REQUEST_TIMEOUT,
+                    max_retries=config.LLM_MAX_RETRIES,
+                    extra_body={"enable_thinking": config.LLM_ENABLE_THINKING},
+                    callbacks=[TokenTrackingHandler()],
+                )
+                logger.info("LLM initialized successfully")
+            except Exception as e:
+                logger.error("Failed to initialize LLM: %s" % str(e))
+                raise
     return _llm_instance
+
+
 def get_fallback_llm():
     """备用 LLM: 主模型连续失败时由 invoke_with_recovery 自动切换。
     未配置 LLM_FALLBACK_MODEL 时返回 None。"""
@@ -266,29 +273,33 @@ def get_fallback_llm():
     if _fallback_llm_instance is None:
         if not config.LLM_FALLBACK_MODEL:
             return None
-        from langchain_openai import ChatOpenAI
-        from app.utils.token_tracker import TokenTrackingHandler
-        logger.info("Initializing Fallback LLM: %s" % config.LLM_FALLBACK_MODEL)
-        try:
-            _fallback_llm_instance = ChatOpenAI(
-                model=config.LLM_FALLBACK_MODEL,
-                temperature=config.LLM_TEMPERATURE,
-                max_tokens=config.LLM_MAX_TOKENS,
-                api_key=config.LLM_FALLBACK_API_KEY,
-                base_url=config.LLM_FALLBACK_API_BASE,
-                timeout=config.LLM_REQUEST_TIMEOUT,
-                max_retries=0,
-                extra_body={"enable_thinking": config.LLM_ENABLE_THINKING},
-                callbacks=[TokenTrackingHandler()],
-            )
-            logger.info("Fallback LLM initialized successfully")
-        except Exception as e:
-            logger.error("Failed to initialize Fallback LLM: %s" % str(e))
-            return None
+        with _llm_lock:
+            if _fallback_llm_instance is not None:
+                return _fallback_llm_instance
+            from langchain_openai import ChatOpenAI
+            from app.utils.token_tracker import TokenTrackingHandler
+            logger.info("Initializing Fallback LLM: %s" % config.LLM_FALLBACK_MODEL)
+            try:
+                _fallback_llm_instance = ChatOpenAI(
+                    model=config.LLM_FALLBACK_MODEL,
+                    temperature=config.LLM_TEMPERATURE,
+                    max_tokens=config.LLM_MAX_TOKENS,
+                    api_key=config.LLM_FALLBACK_API_KEY,
+                    base_url=config.LLM_FALLBACK_API_BASE,
+                    timeout=config.LLM_REQUEST_TIMEOUT,
+                    max_retries=0,
+                    extra_body={"enable_thinking": config.LLM_ENABLE_THINKING},
+                    callbacks=[TokenTrackingHandler()],
+                )
+                logger.info("Fallback LLM initialized successfully")
+            except Exception as e:
+                logger.error("Failed to initialize Fallback LLM: %s" % str(e))
+                return None
     return _fallback_llm_instance
 
 
 def get_embeddings():
+    # 本地 Embedding 优先（含 ImportError 降级到远程）
     if config.USE_LOCAL_EMBEDDING:
         logger.info("Initializing local Embeddings: %s" % config.LOCAL_EMBEDDING_MODEL)
         try:
@@ -299,34 +310,32 @@ def get_embeddings():
                 model_kwargs={"device": "cpu"},
                 encode_kwargs={"normalize_embeddings": True},
             )
-        except ImportError:
-            from langchain_huggingface import HuggingFaceEmbeddings
-
-            embeddings = HuggingFaceEmbeddings(
-                model_name=config.LOCAL_EMBEDDING_MODEL,
-                model_kwargs={"device": "cpu"},
-                encode_kwargs={"normalize_embeddings": True},
-            )
-        logger.info("Local Embeddings initialized successfully")
-        return embeddings
-    else:
-        from langchain_openai import OpenAIEmbeddings
-
-        logger.info(
-            "Initializing Embeddings: %s (Provider: %s)"
-            % (config.EMBEDDING_MODEL_NAME, config.LLM_PROVIDER)
-        )
-        try:
-            embeddings = OpenAIEmbeddings(
-                model=config.EMBEDDING_MODEL_NAME,
-                api_key=config.EMBEDDING_API_KEY,
-                base_url=config.EMBEDDING_API_BASE,
-            )
-            logger.info("Embeddings initialized successfully")
+            logger.info("Local Embeddings initialized successfully")
             return embeddings
-        except Exception as e:
-            logger.error("Failed to initialize Embeddings: %s" % str(e))
-            raise
+        except ImportError:
+            logger.warning(
+                "Local embedding import failed (langchain_huggingface missing), "
+                "falling back to remote Embedding"
+            )
+
+    # 远程 Embedding（DashScope / OpenAI 兼容）
+    from langchain_openai import OpenAIEmbeddings
+
+    logger.info(
+        "Initializing Embeddings: %s (Provider: %s)"
+        % (config.EMBEDDING_MODEL_NAME, config.LLM_PROVIDER)
+    )
+    try:
+        embeddings = OpenAIEmbeddings(
+            model=config.EMBEDDING_MODEL_NAME,
+            api_key=config.EMBEDDING_API_KEY,
+            base_url=config.EMBEDDING_API_BASE,
+        )
+        logger.info("Embeddings initialized successfully")
+        return embeddings
+    except Exception as e:
+        logger.error("Failed to initialize Embeddings: %s" % str(e))
+        raise
 
 
 def log_config_info():

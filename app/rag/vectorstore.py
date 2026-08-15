@@ -19,17 +19,20 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 
 
+# 共享线程池: 避免每次超时调用都创建/销毁 ThreadPoolExecutor
+_VS_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="vs-timeout")
+
+
 def timeout(seconds=300):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(func, *args, **kwargs)
-                try:
-                    return future.result(timeout=seconds)
-                except TimeoutError:
-                    logger.error("%s timeout", func.__name__)
-                    raise
+            future = _VS_EXECUTOR.submit(func, *args, **kwargs)
+            try:
+                return future.result(timeout=seconds)
+            except TimeoutError:
+                logger.error("%s timeout", func.__name__)
+                raise
         return wrapper
     return decorator
 

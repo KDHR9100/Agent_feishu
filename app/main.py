@@ -105,6 +105,7 @@ async def health_check():
 
 @app.get("/health/details")
 async def health_check_details():
+    """Health details endpoint — delegates to /health for backward compatibility."""
     return monitoring_stats.get_health_status()
 
 
@@ -282,15 +283,6 @@ async def startup_event():
                 logger.error("Failed to load RAG retriever: %s" % msg)
     except Exception as e:
         logger.error("RAG loading error: %s" % str(e), exc_info=True)
-
-    # try:
-    # Webhook router disabled (switched to WebSocket long connection)
-    #         logger.info("Loading Feishu router...")
-    #         from app.api.feishu import router as feishu_router
-    #         app.include_router(feishu_router)
-    #         logger.info("Feishu router loaded successfully")
-    #     except Exception as e:
-    #         logger.error("Failed to load Feishu router: %s" % str(e), exc_info=True)
 
     try:
         logger.info("Starting Feishu WebSocket client with health monitor...")

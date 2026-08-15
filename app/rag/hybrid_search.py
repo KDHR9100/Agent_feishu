@@ -70,14 +70,12 @@ class HybridSearcher:
 
             # 仅从本地缓存加载（离线环境不尝试在线下载）
             model_path = _find_cached_model_path(RERANK_MODEL_NAME)
-            if model_path:
-                logger.info("[HybridSearch] 从本地缓存加载 rerank 模型: %s", model_path)
-                self.rerank_model = CrossEncoder(model_path, device="cpu")
-            else:
+            if not model_path:
                 logger.warning("[HybridSearch] 本地缓存未找到 rerank 模型，跳过精排（离线模式）")
                 self._rerank_available = False
                 return
 
+            logger.info("[HybridSearch] 从本地缓存加载 rerank 模型: %s", model_path)
             self.rerank_model = CrossEncoder(model_path, device="cpu")
             self._rerank_available = True
             logger.info("[HybridSearch] Rerank 模型加载成功")
