@@ -129,5 +129,7 @@ class TestMemoryPersistence:
         mem2.clear_history(conv_id)
 
     def teardown_class(self):
-        if os.path.exists("./test_memory.db"):
-            os.remove("./test_memory.db")
+        # WAL 模式下会伴随 -wal/-shm 边车文件, 一并清理避免残留
+        for path in ("./test_memory.db", "./test_memory.db-wal", "./test_memory.db-shm"):
+            if os.path.exists(path):
+                os.remove(path)

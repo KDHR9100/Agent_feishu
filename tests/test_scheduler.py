@@ -24,11 +24,12 @@ class TestTaskScheduler:
         scheduler = TaskScheduler()
         scheduler.start()
         status = scheduler.get_status()
-        assert status["task_count"] == 3
+        assert status["task_count"] == 4
         task_ids = [t["id"] for t in status["tasks"]]
         assert "inventory_check" in task_ids
         assert "daily_report" in task_ids
         assert "weekly_business_report" in task_ids
+        assert "log_retention_cleanup" in task_ids
         scheduler.stop()
 
     def test_get_status_structure(self):

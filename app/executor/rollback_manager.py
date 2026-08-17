@@ -5,16 +5,21 @@
 巡检: 守护线程每 sweep_interval 秒扫一次; 也可手动调用 sweep_once() (测试友好)。
 """
 import logging
+import os
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 
 logger = logging.getLogger("executor.rollback")
 
 
 class RollbackManager:
     def __init__(self, store_api=None, confirm_window_seconds=3600,
-                 sweep_interval_seconds=60, auto_start=False):
+                 sweep_interval_seconds=60, auto_start=False, persist=False):
+        """persist=True 时回滚登记落库 (pending_actions 表):
+        进程重启后恢复未确认动作, 自动回滚安全保证不中断。
+        DB 不可用时自动降级为纯内存, 不影响核心回滚逻辑。"""
         from app.executor.platform_adapter import get_store_api
         self.store = store_api or get_store_api()
         self.confirm_window = confirm_window_seconds
@@ -23,8 +28,111 @@ class RollbackManager:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
+        self._db_available = False
+        if persist:
+            self._db_available = self._check_db()
+            if self._db_available:
+                self._restore_from_db()
         if auto_start:
             self.start()
+
+    # ---------- 持久化 (可选, DB 失败自动降级为纯内存) ----------
+    def _check_db(self) -> bool:
+        try:
+            from app.models.database import engine, Base
+            Base.metadata.create_all(bind=engine)
+            return True
+        except Exception as e:
+            logger.warning("[rollback] SQLite persistence unavailable (%s)", e)
+            return False
+
+    def _restore_from_db(self):
+        """启动时恢复 awaiting_confirmation 记录; 超窗口的由巡检线程照常自动回滚"""
+        try:
+            from app.models.database import SessionLocal
+            from app.models.models import PendingAction
+            session = SessionLocal()
+            try:
+                rows = (
+                    session.query(PendingAction)
+                    .filter(PendingAction.status == "awaiting_confirmation")
+                    .all()
+                )
+                restored = 0
+                for r in rows:
+                    if r.action_id in self._records:
+                        continue
+                    self._records[r.action_id] = {
+                        "action": r.action,
+                        "params": r.params or {},
+                        "old_values": r.old_values or {},
+                        "conversation_id": r.conversation_id or "",
+                        "executed_at": (
+                            r.executed_at.replace(tzinfo=timezone.utc).timestamp()
+                            if r.executed_at else time.time()
+                        ),
+                        "status": "awaiting_confirmation",
+                        "rollbackable": bool(r.rollbackable),
+                    }
+                    restored += 1
+                if restored:
+                    logger.warning(
+                        "[rollback] restored %d pending actions from DB (restart recovery)",
+                        restored,
+                    )
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("[rollback] DB restore error: %s", e)
+
+    def _persist_insert(self, action_id, entry):
+        if not self._db_available:
+            return
+        try:
+            from app.models.database import SessionLocal
+            from app.models.models import PendingAction
+            session = SessionLocal()
+            try:
+                session.add(PendingAction(
+                    action_id=action_id,
+                    action=entry["action"],
+                    params=entry.get("params") or {},
+                    old_values=entry.get("old_values") or {},
+                    conversation_id=entry.get("conversation_id") or "",
+                    status=entry["status"],
+                    rollbackable=entry.get("rollbackable", True),
+                    executed_at=datetime.utcfromtimestamp(entry["executed_at"]),
+                    updated_at=datetime.utcnow(),
+                ))
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("[rollback] DB persist error for %s: %s", action_id, e)
+
+    def _persist_status(self, action_id, status, reason=None):
+        if not self._db_available:
+            return
+        try:
+            from app.models.database import SessionLocal
+            from app.models.models import PendingAction
+            session = SessionLocal()
+            try:
+                row = (
+                    session.query(PendingAction)
+                    .filter(PendingAction.action_id == action_id)
+                    .first()
+                )
+                if row:
+                    row.status = status
+                    if reason:
+                        row.rollback_reason = str(reason)[:100]
+                    row.updated_at = datetime.utcnow()
+                    session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("[rollback] DB status update error for %s: %s", action_id, e)
 
     # ---------- 记录 ----------
     def record(self, action, params, old_values, action_id=None,
@@ -32,7 +140,7 @@ class RollbackManager:
         """执行成功后登记, 等待人工确认; 返回 action_id"""
         action_id = action_id or uuid.uuid4().hex[:12]
         with self._lock:
-            self._records[action_id] = {
+            entry = {
                 "action": action,
                 "params": params,
                 "old_values": old_values or {},
@@ -41,6 +149,8 @@ class RollbackManager:
                 "status": "awaiting_confirmation",  # awaiting_confirmation/confirmed/rolled_back
                 "rollbackable": rollbackable,
             }
+            self._records[action_id] = entry
+            self._persist_insert(action_id, entry)
         logger.info(
             "[rollback] recorded action_id=%s action=%s old_values=%s window=%ds",
             action_id, action, old_values, self.confirm_window,
@@ -54,6 +164,7 @@ class RollbackManager:
             if not entry or entry["status"] != "awaiting_confirmation":
                 return False
             entry["status"] = "confirmed"
+        self._persist_status(action_id, "confirmed")
         logger.info("[rollback] action_id=%s confirmed by human", action_id)
         return True
 
@@ -79,6 +190,7 @@ class RollbackManager:
                 return {"success": False, "reason": "already_rolled_back"}
             if not entry["rollbackable"]:
                 entry["status"] = "rollback_failed"
+                self._persist_status(action_id, "rollback_failed", reason="not_rollbackable")
                 logger.warning("[rollback] action_id=%s not rollbackable, need human", action_id)
                 return {"success": False, "reason": "not_rollbackable"}
             action, params, old_values = entry["action"], entry["params"], entry["old_values"]
@@ -99,6 +211,7 @@ class RollbackManager:
             if action_id in self._records:
                 self._records[action_id]["status"] = "rolled_back"
                 self._records[action_id]["rollback_reason"] = reason
+        self._persist_status(action_id, "rolled_back", reason=reason)
         logger.warning("[rollback] action_id=%s rolled back (%s)", action_id, reason)
         return {"success": True, "reason": reason, "receipt": receipt}
 
@@ -146,5 +259,9 @@ def get_rollback_manager() -> RollbackManager:
     global _instance
     with _instance_lock:
         if _instance is None:
-            _instance = RollbackManager(auto_start=False)
+            # 生产单例开启持久化: 重启后未确认动作可恢复, 自动回滚保证不中断。
+            # 测试环境经 ROLLBACK_PERSISTENCE_ENABLED=false 关闭, 避免跨用例/跨运行的
+            # DB 记录恢复干扰共享 Mock store 的断言。
+            persist = os.getenv("ROLLBACK_PERSISTENCE_ENABLED", "true").lower() == "true"
+            _instance = RollbackManager(auto_start=False, persist=persist)
         return _instance

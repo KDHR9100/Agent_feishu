@@ -50,6 +50,13 @@ class TaskScheduler:
             name="每周业务价值报告",
         )
 
+        self._add_task(
+            job_id="log_retention_cleanup",
+            func=self._run_log_retention_cleanup,
+            trigger=CronTrigger(hour=3, minute=0),
+            name="日志表保留期清理",
+        )
+
     def _add_task(self, job_id, func, trigger, name):
         self.scheduler.add_job(func, trigger=trigger, id=job_id, name=name)
         self._registered_tasks[job_id] = name
@@ -147,6 +154,46 @@ class TaskScheduler:
                 logger.info("Weekly business value report saved: data/%s", file_name)
         except Exception as e:
             logger.error("Weekly business report generation failed: %s", str(e), exc_info=True)
+
+    def _run_log_retention_cleanup(self):
+        """日志表保留期清理: 删除超过 LOG_RETENTION_DAYS 的 token/业务任务日志,
+        防止 token_usage_logs / business_task_logs 无限增长拖慢查询。"""
+        logger.info("Running scheduled task: log_retention_cleanup")
+        try:
+            from datetime import datetime, timedelta
+
+            from app.config import config
+            from app.models.database import SessionLocal
+            from app.models.models import BusinessTaskLog, TokenUsageLog
+
+            retention_days = config.LOG_RETENTION_DAYS
+            if retention_days <= 0:
+                logger.info("Log retention disabled (LOG_RETENTION_DAYS<=0), skip")
+                return
+
+            cutoff = datetime.utcnow() - timedelta(days=retention_days)
+            session = SessionLocal()
+            try:
+                token_deleted = (
+                    session.query(TokenUsageLog)
+                    .filter(TokenUsageLog.created_at < cutoff)
+                    .delete(synchronize_session=False)
+                )
+                task_deleted = (
+                    session.query(BusinessTaskLog)
+                    .filter(BusinessTaskLog.created_at < cutoff)
+                    .delete(synchronize_session=False)
+                )
+                session.commit()
+                logger.info(
+                    "Log retention cleanup done: token_usage_logs=%d, business_task_logs=%d "
+                    "(older than %d days)",
+                    token_deleted, task_deleted, retention_days,
+                )
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error("Log retention cleanup failed: %s", str(e), exc_info=True)
 
 
 task_scheduler = TaskScheduler()

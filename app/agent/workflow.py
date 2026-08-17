@@ -66,11 +66,18 @@ def load_history(state):
 def save_history(state):
     conversation_id = state.get("conversation_id", "default")
     answer = str(state["answer"])
-    local_memory.add_message(conversation_id, "user", state["user_input"])
-    local_memory.add_message(conversation_id, "assistant", answer)
+    # 本轮路由/执行元数据一并归档 (Conversation 表已有对应列, 支撑审计与用量回溯)
+    intent = state.get("intent") or None
+    skills = state.get("skills_to_execute") or []
+    skill = ",".join(skills)[:50] if skills else None
+    token_usage = state.get("token_usage") or None
+    local_memory.add_message(conversation_id, "user", state["user_input"],
+                             intent=intent, skill=skill, token_usage=token_usage)
+    local_memory.add_message(conversation_id, "assistant", answer,
+                             intent=intent, skill=skill, token_usage=token_usage)
     logger.info(
-        "[save_history] conversation_id=%s, user_msg_len=%d, assistant_msg_len=%d"
-        % (conversation_id, len(state["user_input"]), len(answer))
+        "[save_history] conversation_id=%s, user_msg_len=%d, assistant_msg_len=%d, intent=%s"
+        % (conversation_id, len(state["user_input"]), len(answer), intent)
     )
     return state
 

@@ -7,6 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 测试环境禁用路由结果缓存: 保证各用例的 LLM 调用行为可被 mock 精确断言
 os.environ["ROUTER_CACHE_ENABLED"] = "false"
+# 测试环境禁用回滚记录持久化: 防止跨运行恢复的待确认动作被 sweep 回滚,
+# 污染共享 Mock store 状态 (持久化路径由独立验证脚本覆盖)
+os.environ["ROLLBACK_PERSISTENCE_ENABLED"] = "false"
 
 
 @pytest.fixture(scope="session", autouse=True)

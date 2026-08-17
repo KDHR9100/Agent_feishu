@@ -109,6 +109,9 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     APP_PORT = int(os.getenv("APP_PORT", "8000"))
 
+    # token/业务任务日志保留天数: 超期记录由定时任务清理, 防止日志表无限增长
+    LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "90"))
+
     @property
     def OPENAI_API_KEY(self):
         return self.LLM_API_KEY

@@ -82,6 +82,39 @@ class UserProfile(Base):
         return f"<UserProfile(user_id={self.user_id}, user_name={self.user_name}, role={self.role})>"
 
 
+class ConversationSummary(Base):
+    """对话历史 LLM 摘要持久化表 - 摘要随重启保留 (conversation_id 唯一)"""
+    __tablename__ = "conversation_summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(String(100), index=True, unique=True, nullable=False)
+    summary = Column(Text)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ConversationSummary(conversation_id={self.conversation_id})>"
+
+
+class PendingAction(Base):
+    """L4 待确认动作记录表 - 回滚窗口登记落库, 重启后自动回滚保证不丢失"""
+    __tablename__ = "pending_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    action_id = Column(String(50), index=True, unique=True, nullable=False)
+    action = Column(String(100), nullable=False)
+    params = Column(JSON)
+    old_values = Column(JSON)
+    conversation_id = Column(String(100))
+    status = Column(String(30), default="awaiting_confirmation", index=True)
+    rollbackable = Column(Boolean, default=True)
+    rollback_reason = Column(String(100))
+    executed_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<PendingAction(action_id={self.action_id}, action={self.action}, status={self.status})>"
+
+
 class TokenUsageLog(Base):
     """Token 消耗日志表 - 记录每次技能调用的 token 用量"""
     __tablename__ = "token_usage_logs"

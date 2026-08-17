@@ -16,6 +16,9 @@ ANCHOR_KEEP_COUNT = 4
 CHARS_PER_TOKEN = 2.5
 COMPACT_MAX_TOKENS = 6000
 
+# 单条消息入库的长度安全上限 (超出截断并告警; Text 列本身无限制, 此值防异常超大输入)
+DB_CONTENT_LIMIT = 20000
+
 
 def estimate_tokens(text):
     """粗估文本 token 数"""
@@ -86,19 +89,23 @@ class LocalMemory:
         return SessionLocal()
 
     def _load_from_db(self, conversation_id: str) -> List[Dict]:
+        """加载最近 max_history 条消息 (DB 为全量归档, 取最新窗口)"""
         if not self._db_available:
             return []
         try:
             from app.models.models import Conversation
             session = self._get_session()
             try:
+                # DB 保留全量历史(归档语义), 按 id 倒序取最新 N 条再反转回时间正序;
+                # id 单调递增, 比 created_at 排序更稳定(同秒内多条不会乱序)
                 rows = (
                     session.query(Conversation)
                     .filter(Conversation.conversation_id == conversation_id)
-                    .order_by(Conversation.created_at.asc())
+                    .order_by(Conversation.id.desc())
                     .limit(self.max_history)
                     .all()
                 )
+                rows.reverse()
                 return [
                     {"role": r.role, "content": r.content,
                      "timestamp": r.created_at.isoformat() if r.created_at else ""}
@@ -110,17 +117,29 @@ class LocalMemory:
             logger.warning("[memory] DB load error: %s", e)
             return []
 
-    def _save_to_db(self, conversation_id: str, role: str, content: str):
+    def _save_to_db(self, conversation_id: str, role: str, content: str,
+                    intent: Optional[str] = None, skill: Optional[str] = None,
+                    token_usage: Optional[Dict] = None):
         if not self._db_available:
             return
         try:
             from app.models.models import Conversation
             session = self._get_session()
             try:
+                if len(content) > DB_CONTENT_LIMIT:
+                    logger.warning(
+                        "[memory] content truncated for DB: conversation_id=%s, "
+                        "original_len=%d, limit=%d",
+                        conversation_id, len(content), DB_CONTENT_LIMIT,
+                    )
+                    content = content[:DB_CONTENT_LIMIT]
                 msg = Conversation(
                     conversation_id=conversation_id,
                     role=role,
-                    content=content[:4000],
+                    content=content,
+                    intent=intent,
+                    skill=skill,
+                    token_usage=token_usage,
                     created_at=datetime.utcnow(),
                 )
                 session.add(msg)
@@ -130,31 +149,54 @@ class LocalMemory:
         except Exception as e:
             logger.warning("[memory] DB save error: %s", e)
 
-    def _trim_db(self, conversation_id: str):
+    def _load_summary_from_db(self, conversation_id: str) -> Optional[str]:
+        """从 DB 恢复会话摘要 (摘要跨重启保留)"""
         if not self._db_available:
-            return
+            return None
         try:
-            from app.models.models import Conversation
+            from app.models.models import ConversationSummary
             session = self._get_session()
             try:
-                rows = (
-                    session.query(Conversation.id)
-                    .filter(Conversation.conversation_id == conversation_id)
-                    .order_by(Conversation.id.desc())
-                    .limit(self.max_history)
-                    .all()
+                row = (
+                    session.query(ConversationSummary)
+                    .filter(ConversationSummary.conversation_id == conversation_id)
+                    .first()
                 )
-                if rows:
-                    min_keep_id = rows[-1][0]
-                    session.query(Conversation).filter(
-                        Conversation.conversation_id == conversation_id,
-                        Conversation.id < min_keep_id,
-                    ).delete(synchronize_session=False)
-                    session.commit()
+                return row.summary if row else None
             finally:
                 session.close()
         except Exception as e:
-            logger.warning("[memory] DB trim error: %s", e)
+            logger.warning("[memory] DB summary load error: %s", e)
+            return None
+
+    def _save_summary_to_db(self, conversation_id: str, summary: str):
+        """写入/更新会话摘要 (upsert)"""
+        if not self._db_available:
+            return
+        try:
+            from app.models.models import ConversationSummary
+            session = self._get_session()
+            try:
+                row = (
+                    session.query(ConversationSummary)
+                    .filter(ConversationSummary.conversation_id == conversation_id)
+                    .first()
+                )
+                if row:
+                    row.summary = summary
+                    row.updated_at = datetime.utcnow()
+                else:
+                    row = ConversationSummary(
+                        conversation_id=conversation_id,
+                        summary=summary,
+                        updated_at=datetime.utcnow(),
+                    )
+                    session.add(row)
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("[memory] DB summary save error: %s", e)
 
     def _evict_lru(self):
         """淘汰最久未使用的会话（LRU）"""
@@ -205,6 +247,9 @@ class LocalMemory:
             else:
                 self._summaries[conversation_id] = summary[:500]
 
+            # 摘要落库: 重启后长对话的压缩历史不丢失
+            self._save_summary_to_db(conversation_id, self._summaries[conversation_id])
+
             logger.info(
                 "[memory] summarized %d old messages for %s, summary_len=%d"
                 % (len(old_messages), conversation_id, len(self._summaries[conversation_id]))
@@ -221,6 +266,12 @@ class LocalMemory:
         确保长程多轮对话后用户最初的问题陈述不丢失。
         """
         summary = self._summaries.get(conversation_id)
+        # 内存无摘要时尝试从 DB 恢复 (摘要已持久化, 跨重启保留)
+        if summary is None:
+            db_summary = self._load_summary_from_db(conversation_id)
+            if db_summary:
+                self._summaries[conversation_id] = db_summary
+                summary = db_summary
         recent = self.get_last_n_messages(conversation_id, n=n)
         # 锚定摘要只填补 "窗口已放不下、但 LLM 摘要尚未触发(<=阈值)" 的空档;
         # 超过阈值后由 LLM 摘要机制负责, 其失败时保持 None (不掩盖容错语义)
@@ -234,7 +285,9 @@ class LocalMemory:
                 summary = "【对话开始时的关键内容】\n" + "\n".join(anchor_lines)
         return summary, recent
 
-    def add_message(self, conversation_id: str, role: str, content: str):
+    def add_message(self, conversation_id: str, role: str, content: str,
+                    intent: Optional[str] = None, skill: Optional[str] = None,
+                    token_usage: Optional[Dict] = None):
         if conversation_id not in self.conversations:
             db_history = self._load_from_db(conversation_id)
             if db_history:
@@ -247,12 +300,14 @@ class LocalMemory:
             {"role": role, "content": content, "timestamp": datetime.now().isoformat()}
         )
         self._touch(conversation_id)
-        self._save_to_db(conversation_id, role, content)
+        self._save_to_db(conversation_id, role, content,
+                         intent=intent, skill=skill, token_usage=token_usage)
 
         # s08: 压缩顺序修正 - 免费裁剪先跑, LLM 摘要后跑
+        # 注意: 内存窗口裁剪不再联动删除 DB 记录 — DB 承担全量归档职责,
+        # 历史消息永久保留 (审计/回溯), 内存仅保留最近 max_history 条热数据
         if len(self.conversations[conversation_id]) > self.max_history:
             self.conversations[conversation_id] = self.conversations[conversation_id][-self.max_history:]
-            self._trim_db(conversation_id)
         if len(self.conversations[conversation_id]) > SUMMARIZE_THRESHOLD:
             self._summarize_old_messages(conversation_id)
 
