@@ -27,8 +27,8 @@ COPY scripts/ ./scripts/
 # 技能清单（MCP 动态注册数据源，启动必需）
 COPY skills_manifest.json .
 
-# 创建数据目录
-RUN mkdir -p data/uploads data/vectorstore
+# 创建数据目录: 上传/向量库 + SQLite 库目录 (compose 挂载点) + 持久记忆目录
+RUN mkdir -p data/uploads data/vectorstore db .memory
 
 # 创建非 root 用户
 RUN useradd --create-home --shell /bin/bash appuser && \

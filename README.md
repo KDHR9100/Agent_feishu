@@ -1,6 +1,6 @@
 # Ecommerce Agent
 
-基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库（时间衰减）、文件解析、多轮对话记忆（60 条窗口 + 自动摘要）、Guardrails 安全防护、MCP 动态技能热插拔、Plan-Execute 顺序规划、高危操作飞书审批、多模态图片解析、全链路 Token 追踪等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
+基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库（时间衰减）、文件解析、多轮对话记忆（60 条热窗口 + SQLite 全量归档 + LLM 摘要持久化）、Guardrails 安全防护、MCP 动态技能热插拔、Plan-Execute 顺序规划、高危操作飞书审批、回滚登记持久化（重启不丢安全保证）、多模态图片解析、全链路 Token 追踪等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
 
 ---
 
@@ -74,7 +74,7 @@ feishu_tool.reply_message() --- 回复用户
 | Embedding | sentence-transformers | 本地 paraphrase-multilingual-MiniLM-L12-v2 |
 | 文档管理 | SHA-256 + 增量更新 | 变更检测、查询缓存 |
 | 飞书集成 | lark-oapi | WebSocket 长连接、AES 消息解密 |
-| 数据存储 | SQLite + SQLAlchemy | 商品销售、广告数据、对话历史 |
+| 数据存储 | SQLite(WAL) + SQLAlchemy | 对话全量归档、摘要持久化、回滚登记落库；WAL + busy timeout 支撑多线程并发写 |
 | 文件解析 | pandas, openpyxl, PyPDF2, python-docx | Excel/CSV/PDF/Word |
 | 安全防护 | Guardrails + pycryptodome | 输入检测、飞书消息 AES 解密 |
 | 定时任务 | APScheduler | 库存预警、日报生成 |
@@ -289,22 +289,34 @@ LLM-as-Judge 评估（app/eval/llm_judge.py）：
 
 ## 7. 记忆系统
 
-LocalMemory 双层存储架构：
+LocalMemory 双层存储架构（归档式持久化）：
 
 | 层 | 实现 | 说明 |
 |----|------|------|
-| 内存层 | OrderedDict + LRU 淘汰 | 超过 1000 个会话时淘汰最久未用的 |
-| 持久层 | SQLite（SQLAlchemy） | 表 Conversation，写入时同步，读取时懒加载 |
+| 内存层 | OrderedDict + LRU 淘汰 | 超过 1000 个会话时淘汰最久未用的；每会话仅保留 60 条热窗口 |
+| 持久层 | SQLite（SQLAlchemy，WAL 模式） | 表 Conversation，写入时同步，**全量归档永不物理删除**；读取时懒加载最近 60 条（按 id 倒序取最新窗口） |
 
 | 参数 | 值 |
 |------|------|
-| max_history | 60 条/会话 |
+| max_history | 60 条/会话（内存热窗口） |
 | max_conversations | 1000 |
 | 工作流实际使用 | 最近 30 条 + 历史摘要 |
-| 自动摘要 | 消息超过 50 条时，旧消息 LLM 压缩为摘要（history_summary） |
-| DB 内容截断 | 4000 字符 |
+| 自动摘要 | 消息超过 50 条时，旧消息 LLM 压缩为摘要（history_summary），**持久化到 conversation_summaries 表，跨重启保留** |
+| DB 内容截断 | 20000 字符（超出截断并告警） |
+| 消息元数据 | save_history 同时写入 intent / skill / token_usage，支撑审计与用量回溯 |
 
 每条消息格式：{"role": "user"/"assistant", "content": str, "timestamp": ISO时间}
+
+### SQLite 持久化层特性
+
+| 特性 | 说明 |
+|------|------|
+| WAL 模式 | 连接时自动启用 `PRAGMA journal_mode=WAL`，读写互不阻塞，支撑 workflow / APScheduler / WS 回调多线程并发写 |
+| busy timeout | 30 秒，并发写冲突时等待而非抛 "database is locked" |
+| 归档式历史 | conversations 表保留全量对话（支持审计/回溯），窗口裁剪仅作用于内存层 |
+| 摘要持久化 | conversation_summaries 表（conversation_id 唯一，upsert），重启后长对话压缩历史不丢失 |
+| 回滚登记 | pending_actions 表记录 L4 待确认动作（old_values 等），重启后自动恢复，1 小时自动回滚保证不中断；`ROLLBACK_PERSISTENCE_ENABLED` 可关闭 |
+| 日志保留期 | token_usage_logs / business_task_logs 每日 03:00 清理超期记录（LOG_RETENTION_DAYS，默认 90 天） |
 
 ---
 
@@ -346,6 +358,7 @@ LocalMemory 双层存储架构：
 | inventory_check | 库存预警检查，按品类阈值检测低库存 |
 | daily_report | 日报生成 |
 | weekly_business_report | 每周一 09:30 生成业务价值报告（活跃用户/任务量/节省工时），保存到 data/reports/ |
+| log_retention_cleanup | 每日 03:00 清理超过 LOG_RETENTION_DAYS（默认 90 天）的 token_usage_logs / business_task_logs，防止日志表无限增长 |
 ---
 
 ## 11. 项目结构
@@ -365,8 +378,8 @@ Agent_feishu/
 │   │   ├── local_memory.py       # 双层记忆（内存 LRU + SQLite 持久化）
 │   │   └── persistent_memory.py  # 持久记忆（从用户输入提取长期记忆 + 检索注入）
 │   ├── models/
-│   │   ├── database.py           # SQLAlchemy 引擎
-│   │   └── models.py             # ProductSale, AdsPerformance, BusinessTaskLog 数据模型
+│   │   ├── database.py           # SQLAlchemy 引擎（SQLite WAL + busy timeout）
+│   │   └── models.py             # 8 张 ORM 表（含 ConversationSummary 摘要持久化、PendingAction 回滚登记）
 │   ├── monitoring/
 │   │   ├── stats.py              # 监控统计
 │   │   └── business.py           # 业务价值度量（DAU/成功率/节省工时）
@@ -390,9 +403,9 @@ Agent_feishu/
 │   ├── executor/                 # L4 动作执行层（审批门 + 回滚）
 │   │   ├── action_verifier.py    # 高危动作校验与审批门
 │   │   ├── platform_adapter.py   # 店铺平台适配器（mock/真实）
-│   │   └── rollback_manager.py   # 动作回滚管理
+│   │   └── rollback_manager.py   # 动作回滚管理（登记落库 pending_actions，重启可恢复）
 │   ├── tasks/
-│   │   └── scheduler.py          # APScheduler 定时任务
+│   │   └── scheduler.py          # APScheduler 定时任务（含日志保留期清理）
 │   ├── tools/
 │   │   ├── feishu_ws.py          # 飞书 WebSocket 长连接
 │   │   ├── feishu_tool.py        # 飞书 API 封装
@@ -455,7 +468,11 @@ conda activate feishuagent
 ### 12.2 安装依赖
 
 ```bash
+# 方式一：pip
 pip install -r requirements.txt
+
+# 方式二：uv（更快的依赖解析与安装）
+uv pip install -r requirements.txt
 ```
 
 ### 12.3 配置环境变量
@@ -507,10 +524,14 @@ docker compose down
 ### docker-compose 配置
 
 - 端口映射：8000:8000
-- 环境变量：env_file: .env
+- 环境变量：env_file: .env；compose environment 覆盖 `DATABASE_URL=sqlite:////app/db/feishu_agent.db`（优先级高于 env_file）
 - 数据卷：./data:/app/data（知识库文档 + 向量索引）
+- 数据库卷：db_data 命名卷挂载 /app/db（SQLite 库 + WAL 边车文件，容器重建/升级不丢归档对话、摘要与回滚登记）
+- 记忆卷：memory_data 命名卷挂载 /app/.memory（持久记忆 Markdown，内容私密不入库）
 - 模型缓存：model_cache 命名卷（持久化 HuggingFace 模型）
 - 重启策略：unless-stopped
+
+> 数据库与记忆目录使用命名卷而非 bind mount：首次使用时自动继承镜像内目录的 appuser 属主，避免宿主机目录缺失时 Docker 以 root 创建导致非 root 容器写失败。备份可用 `docker compose cp app:/app/db/feishu_agent.db ./backup.db`（建议先停服或使用 SQLite 在线备份）。
 
 > 注意：首次启动需确保 HuggingFace 模型已缓存，否则 HF_HUB_OFFLINE=1 会导致降级到 DashScope 远程 Embedding。
 
@@ -562,7 +583,7 @@ docker compose down
 
 ## 16. 单元测试
 
-共 45 个测试文件、481 个用例（含 tests/integration 6 个端到端流程文件、38 个集成用例），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪、定价/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
+共 46 个测试文件、496 个用例（492 passed / 4 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪、定价/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
 
 ### 共享 Fixture（conftest.py）
 
@@ -628,7 +649,7 @@ docker compose down
 
 ### test_scheduler.py — 定时调度（8 个测试）
 
-初始化、启停、3 个注册任务（含每周业务价值报告）、状态结构、库存检查安全、日报安全、重复启动幂等、next_run_time
+初始化、启停、4 个注册任务（含每周业务价值报告与日志保留期清理）、状态结构、库存检查安全、日报安全、重复启动幂等、next_run_time
 
 ### test_tools.py — 关键词 + 工单工具（11 个测试）
 
@@ -708,6 +729,8 @@ GitHub Actions（.github/workflows/ci.yml）：
 | 备用模型 | LLM_FALLBACK_MODEL | "" | 主模型连续失败时自动切换的备用模型名（不配置则不启用） |
 | 备用模型密钥 | LLM_FALLBACK_API_KEY/BASE | 复用 LLM_* | 备用模型的 API 密钥和地址 |
 | 路由缓存 | ROUTER_CACHE_ENABLED | true | temperature=0 路由结果缓存开关（TTL 600s, MAXSIZE 512） |
+| 日志保留天数 | LOG_RETENTION_DAYS | 90 | token/业务任务日志保留期，每日 03:00 定时清理超期记录；<=0 关闭清理 |
+| 回滚登记持久化 | ROLLBACK_PERSISTENCE_ENABLED | true | L4 待确认动作登记落库（pending_actions 表），重启后恢复未确认动作；测试环境自动关闭 |
 | 关键词快速路径 | ROUTER_KEYWORD_FAST_PATH | true | 高置信关键词命中时跳过 LLM（conf>=2 唯一命中触发） |
 | LLM 请求超时 | LLM_REQUEST_TIMEOUT | 45 | 主 LLM 单次请求超时秒数 |
 | LLM 最大重试 | LLM_MAX_RETRIES | 1 | 主 LLM 请求失败重试次数 |
