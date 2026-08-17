@@ -36,7 +36,6 @@ try:
         logger.info("[tracing] OpenTelemetry initialized for %s", service_name)
 
     def get_tracer():
-        global _tracer
         if _tracer is None:
             init_tracing()
         return _tracer
