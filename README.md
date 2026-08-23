@@ -18,7 +18,10 @@
 10. [定时任务](#10-定时任务)
 11. [项目结构](#11-项目结构)
 12. [快速开始](#12-快速开始)
-13. [Docker 部署](#13-docker-部署)
+    - [一键安装（推荐）](#121-一键安装推荐)
+    - [手动安装](#122-手动安装)
+    - [Docker 部署](#123-docker-部署)
+13. [Docker 部署详解](#13-docker-部署详解)
 14. [API 接口](#14-api-接口)
 15. [飞书开放平台配置](#15-飞书开放平台配置)
 16. [单元测试](#16-单元测试)
@@ -443,6 +446,8 @@ Agent_feishu/
 │   └── init_db.py                # 数据库初始化
 ├── .github/workflows/
 │   └── ci.yml                    # GitHub Actions CI
+├── setup.sh                      # 一键安装脚本（Linux / macOS）
+├── setup.bat                     # 一键安装脚本（Windows）
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .dockerignore
@@ -458,14 +463,68 @@ Agent_feishu/
 
 ## 12. 快速开始
 
-### 12.1 创建环境
+### 前置条件
+
+| 依赖 | 最低版本 | 说明 |
+|------|---------|------|
+| Python | 3.11 | 必须 |
+| pip / uv | 最新 | Python 包管理器 |
+| Git | 任意 | 拉取代码 |
+| 系统库 | libopenblas-dev | FAISS 向量库需要（Ubuntu: `apt install libopenblas-dev`，CentOS: `yum install openblas-devel`，macOS: `brew install openblas`） |
+
+> 支持平台：Linux（Ubuntu/CentOS 等）、macOS、Windows 原生、WSL、Docker
+
+### 12.1 一键安装（推荐）
+
+提供一键安装脚本，自动完成环境检测、虚拟环境创建、依赖安装、数据库初始化等全部步骤。
+
+**Linux / macOS / WSL：**
+
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+**Windows：**
+
+双击运行 `setup.bat`
+
+脚本会自动完成：
+1. 检测 Python 3.11+ 版本
+2. 检测系统依赖（gcc、libopenblas），缺失时给出安装命令提示
+3. 创建虚拟环境（优先 conda，回退 venv）
+4. 安装 Python 依赖（优先 uv，回退 pip）
+5. 从 `.env.example` 复制 `.env`，引导填写 API 密钥等配置
+6. 初始化数据库 + 种子数据
+7. 创建数据目录
+8. 生成快捷启动脚本 `start.sh` / `start.bat`
+
+**安装完成后启动：**
+
+```bash
+# Linux / macOS / WSL
+./start.sh          # 开发模式（热重载）
+./start.sh prod     # 生产模式
+
+# Windows
+start.bat           # 开发模式
+start.bat prod      # 生产模式
+```
+
+### 12.2 手动安装
+
+如果一键安装脚本不满足需求，可按以下步骤手动安装。
+
+#### 12.2.1 创建环境
 
 ```bash
 conda create -n feishuagent python=3.11
 conda activate feishuagent
+# 或者使用 venv:
+# python3.11 -m venv .venv && source .venv/bin/activate
 ```
 
-### 12.2 安装依赖
+#### 12.2.2 安装依赖
 
 ```bash
 # 方式一：pip
@@ -475,35 +534,61 @@ pip install -r requirements.txt
 uv pip install -r requirements.txt
 ```
 
-### 12.3 配置环境变量
+#### 12.2.3 配置环境变量
 
-复制 .env.example 为 .env 并填写 LLM_API_KEY、FEISHU_APP_ID、FEISHU_APP_SECRET 等。
+复制 .env.example 为 .env 并填写 LLM_API_KEY、FEISHU_APP_ID、FEISHU_APP_SECRET、API_KEY 等必填项。
 
-### 12.4 初始化数据库
+```bash
+cp .env.example .env
+# 编辑 .env，至少填写以下必填项：
+#   LLM_API_KEY       - 大模型 API 密钥（DashScope/OpenAI）
+#   FEISHU_APP_ID     - 飞书应用 ID
+#   FEISHU_APP_SECRET - 飞书应用密钥
+#   API_KEY           - HTTP 接口鉴权密钥
+```
+
+#### 12.2.4 初始化数据库
 
 ```bash
 python scripts/init_db.py
 ```
 
-### 12.5 启动服务
+#### 12.2.5 启动服务
 
 ```bash
 # 开发模式
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 # 生产模式
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 12.6 RAG 评估（可选）
+#### 12.2.6 RAG 评估（可选）
 
 ```bash
 python -m app.rag.eval.evaluate_rag
 ```
 
+### 12.3 Docker 部署
+
+无需安装 Python 环境，只需 Docker + Docker Compose。
+
+```bash
+docker compose up -d --build
+docker compose logs -f
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+> 详细说明见 [第 13 节](#13-docker-部署详解)
+
 ---
 
-## 13. Docker 部署
+## 13. Docker 部署详解
 
 ### Dockerfile 特性
 
