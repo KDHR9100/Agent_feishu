@@ -50,7 +50,8 @@ def _create_test_csvs(data_dir: str):
 def setup_test_database():
     """Create test CSV data files and system DB tables before any tests run."""
     from app.config import config
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import create_engine
+    from app.models.database import Base
 
     # 创建临时目录存放测试 CSV
     tmp_data_dir = tempfile.mkdtemp(prefix="test_biz_data_")
@@ -62,29 +63,7 @@ def setup_test_database():
         config.DATABASE_URL,
         connect_args={"check_same_thread": False},
     )
-
-    with engine.connect() as conn:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS product_sales (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sku TEXT, product_name TEXT, category TEXT,
-                sales_volume INTEGER DEFAULT 0, revenue REAL DEFAULT 0,
-                cost REAL DEFAULT 0, inventory INTEGER DEFAULT 0,
-                avg_price REAL DEFAULT 0, date TEXT
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS ads_performance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ad_id TEXT, ad_name TEXT, platform TEXT,
-                clicks INTEGER DEFAULT 0, impressions INTEGER DEFAULT 0,
-                spend REAL DEFAULT 0, conversions INTEGER DEFAULT 0,
-                conversion_value REAL DEFAULT 0, ctr REAL DEFAULT 0,
-                cpc REAL DEFAULT 0, roas REAL DEFAULT 0,
-                campaign_id TEXT, ad_group_id TEXT, date TEXT
-            )
-        """))
-        conn.commit()
+    Base.metadata.create_all(bind=engine)
 
     yield engine
 

@@ -59,6 +59,10 @@ class DatabaseTool:
                 rows.append(_cast_row(row))
         return rows
 
+    def read_data(self, name: str) -> List[Dict[str, Any]]:
+        """读取指定 CSV 数据文件的全部内容，返回解析后的行列表。"""
+        return self._read(name)
+
     def _write(self, name: str, rows: List[Dict[str, Any]], fieldnames: List[str]):
         path = os.path.join(self._data_dir, name)
         os.makedirs(os.path.dirname(path), exist_ok=True)

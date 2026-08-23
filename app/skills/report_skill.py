@@ -11,8 +11,7 @@ from app.utils.time_utils import parse_time_range
 def _collect_report_data(start_date: datetime.date, end_date: datetime.date) -> Dict[str, Any]:
     """根据日期范围从 CSV 收集数据"""
     try:
-        from app.tools.database_tool import DatabaseTool
-        db = DatabaseTool()
+        from app.tools.database_tool import db_tool
 
         start_str = start_date.isoformat()
         end_str = end_date.isoformat()
@@ -20,7 +19,7 @@ def _collect_report_data(start_date: datetime.date, end_date: datetime.date) -> 
         data_parts = []
 
         # 读取并过滤商品销售数据
-        all_products = db._read("product_sales.csv")
+        all_products = db_tool.read_data("product_sales.csv")
         filtered_products = [
             r for r in all_products
             if start_str <= str(r.get("date", "")) <= end_str
@@ -29,7 +28,7 @@ def _collect_report_data(start_date: datetime.date, end_date: datetime.date) -> 
             data_parts.append(f"【商品销售数据】\n{filtered_products}")
 
         # 读取并过滤广告投放数据
-        all_ads = db._read("ads_performance.csv")
+        all_ads = db_tool.read_data("ads_performance.csv")
         filtered_ads = [
             r for r in all_ads
             if start_str <= str(r.get("date", "")) <= end_str

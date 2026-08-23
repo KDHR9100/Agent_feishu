@@ -44,27 +44,26 @@ def _filter_by_date(rows, start_date, end_date):
 def _get_db_data(user_input: str) -> Dict[str, Any]:
     """尝试从数据库获取相关数据，根据用户输入解析时间范围"""
     try:
-        from app.tools.database_tool import DatabaseTool
-        db = DatabaseTool()
+        from app.tools.database_tool import db_tool
 
         start_date, end_date, time_desc = parse_time_range(user_input)
         data_parts = []
 
         # 根据关键词判断查询方向
         if any(kw in user_input for kw in ["销量", "销售", "商品", "SKU"]):
-            all_products = db._read("product_sales.csv")
+            all_products = db_tool.read_data("product_sales.csv")
             products = _filter_by_date(all_products, start_date, end_date)
             if products:
                 data_parts.append(f"商品销售数据（{time_desc}）：\n{products[:10]}")
 
         if any(kw in user_input for kw in ["广告", "投放", "ROI", "推广"]):
-            all_ads = db._read("ads_performance.csv")
+            all_ads = db_tool.read_data("ads_performance.csv")
             ads = _filter_by_date(all_ads, start_date, end_date)
             if ads:
                 data_parts.append(f"广告投放数据（{time_desc}）：\n{ads[:10]}")
 
         if any(kw in user_input for kw in ["品类", "分类", "类目"]):
-            all_products = db._read("product_sales.csv")
+            all_products = db_tool.read_data("product_sales.csv")
             products = _filter_by_date(all_products, start_date, end_date)
             if products:
                 # 按品类汇总
@@ -79,7 +78,7 @@ def _get_db_data(user_input: str) -> Dict[str, Any]:
                 data_parts.append(f"品类汇总数据（{time_desc}）：\n{categories}")
 
         if any(kw in user_input for kw in ["渠道", "平台", "对比"]):
-            all_ads = db._read("ads_performance.csv")
+            all_ads = db_tool.read_data("ads_performance.csv")
             ads = _filter_by_date(all_ads, start_date, end_date)
             if ads:
                 from collections import defaultdict

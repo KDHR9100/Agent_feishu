@@ -3,48 +3,6 @@ from datetime import datetime
 from .database import Base
 
 
-class ProductSales(Base):
-    __tablename__ = "product_sales"
-
-    id = Column(Integer, primary_key=True, index=True)
-    sku = Column(String(100), index=True, nullable=False)
-    product_name = Column(String(200))
-    category = Column(String(100))
-    sales_volume = Column(Integer, default=0)
-    revenue = Column(Float, default=0.0)
-    cost = Column(Float, default=0.0)
-    inventory = Column(Integer, default=0)
-    avg_price = Column(Float, default=0.0)
-    date = Column(DateTime, default=datetime.utcnow)
-    source = Column(String(50))
-
-    def __repr__(self):
-        return f"<ProductSales(sku={self.sku}, sales={self.sales_volume}, revenue={self.revenue})>"
-
-
-class AdsPerformance(Base):
-    __tablename__ = "ads_performance"
-
-    id = Column(Integer, primary_key=True, index=True)
-    ad_id = Column(String(100), index=True, nullable=False)
-    ad_name = Column(String(200))
-    platform = Column(String(50))
-    clicks = Column(Integer, default=0)
-    impressions = Column(Integer, default=0)
-    spend = Column(Float, default=0.0)
-    conversions = Column(Integer, default=0)
-    conversion_value = Column(Float, default=0.0)
-    ctr = Column(Float, default=0.0)
-    cpc = Column(Float, default=0.0)
-    roas = Column(Float, default=0.0)
-    date = Column(DateTime, default=datetime.utcnow)
-    campaign_id = Column(String(100))
-    ad_group_id = Column(String(100))
-
-    def __repr__(self):
-        return f"<AdsPerformance(ad_id={self.ad_id}, clicks={self.clicks}, spend={self.spend}, roas={self.roas})>"
-
-
 class Conversation(Base):
     __tablename__ = "conversations"
 
