@@ -51,6 +51,26 @@ def check_low_inventory(db_result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return low_items
 
 
+def _format_inventory_response(total_items: int, low_items: List[Dict[str, Any]]) -> str:
+    urgency_labels = {"critical": "紧急", "high": "高", "medium": "中"}
+    lines = [f"数据库共有 {total_items} 个商品。"]
+    if not low_items:
+        lines.append("所有商品库存充足，无需补货。")
+        return "\n".join(lines)
+    lines.append(f"其中 {len(low_items)} 个商品库存低于预警阈值：\n")
+    for item in low_items:
+        label = urgency_labels.get(item["urgency"], item["urgency"])
+        lines.append(
+            f"- **{item['product_name']}** ({item['product_id']}) | "
+            f"类别: {item['category']} | "
+            f"当前库存: {item['current_stock']} | "
+            f"预警阈值: {item['threshold']} | "
+            f"缺口: {item['deficit']} | "
+            f"紧急程度: {label}"
+        )
+    return "\n".join(lines)
+
+
 def inventory_skill(user_input: str) -> Dict[str, Any]:
     try:
         all_products = db_tool.get_all_products()
@@ -66,6 +86,7 @@ def inventory_skill(user_input: str) -> Dict[str, Any]:
             ]
         }
         low_inventory_items = check_low_inventory(db_result)
+        response_text = _format_inventory_response(len(all_products), low_inventory_items)
         return {
             "type": "inventory_report",
             "data": {
@@ -74,6 +95,7 @@ def inventory_skill(user_input: str) -> Dict[str, Any]:
                 "low_inventory_count": len(low_inventory_items),
                 "low_inventory_items": low_inventory_items,
                 "thresholds": INVENTORY_THRESHOLDS,
+                "response": response_text,
             },
         }
     except Exception as e:
@@ -85,6 +107,7 @@ def inventory_skill(user_input: str) -> Dict[str, Any]:
                 "low_inventory_count": 0,
                 "low_inventory_items": [],
                 "error": str(e),
+                "response": f"查询库存时出错: {e}",
             },
         }
 

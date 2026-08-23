@@ -8,13 +8,14 @@ from app.tools.database_tool import db_tool
 
 
 def extract_sku_from_input(user_input: str) -> Optional[str]:
+    # 捕获完整 SKU 词元 (含 "SKU" 前缀), 如 SKU001 / SKU-A001 / SKU-XXXX
     patterns = [
-        r"SKU\s*[:]?\s*([A-Za-z0-9_-]+)",
+        r"(SKU[-_]?[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*)",
     ]
     for pattern in patterns:
-        match = re.search(pattern, user_input)
+        match = re.search(pattern, user_input, re.IGNORECASE)
         if match:
-            return match.group(1)
+            return match.group(1).upper()
     return None
 
 
@@ -68,10 +69,18 @@ def product_skill(user_input: str):
 
     extracted_sku = extract_sku_from_input(user_input)
 
+    # 数据诚实性: 指定 SKU 查不到时如实打标, 全店数据仅作参考, 防止 LLM 编造
+    requested_sku_missing = False
+    honesty_note = ""
     try:
         if extracted_sku:
             db_data = db_tool.get_product_sales(sku=extracted_sku, days=30)
             if not db_data or (isinstance(db_data, list) and len(db_data) == 0):
+                requested_sku_missing = True
+                honesty_note = (
+                    "用户指定的 SKU【%s】在数据库中没有任何销售记录。"
+                    "下方 database_data 是全店其他商品的参考数据, 不是该 SKU 的数据。" % extracted_sku
+                )
                 db_data = db_tool.get_product_sales(days=7)
         else:
             db_data = db_tool.get_product_sales(days=7)
@@ -118,6 +127,8 @@ def product_skill(user_input: str):
         "trend_analysis": trend_analysis,
         "profit_margin": profit_margin,
         "extracted_sku": extracted_sku,
+        "requested_sku_missing": requested_sku_missing,
+        "honesty_note": honesty_note,
         "user_input": user_input,
     }
 

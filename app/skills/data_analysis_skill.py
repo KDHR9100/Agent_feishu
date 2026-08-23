@@ -18,6 +18,10 @@ from app.config import get_llm, logger
 DATA_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的电商数据分析师。
 请基于提供的数据，进行深入分析并生成专业报告。
 
+## 数据诚实性铁律（最高优先级，违反即无效）
+1. 严禁编造：你输出的每一个数字、SKU、日期都必须能在提供的数据中找到出处；数据里没有的内容一律不许写。
+2. 若未提供有效数据：只能说明"暂无相关数据"并给出分析思路框架，绝不能虚构任何具体数字、销量、ROI。
+
 分析要求：
 1. 数据概览：关键指标汇总
 2. 趋势分析：同比/环比变化
@@ -98,7 +102,8 @@ def data_analysis_skill(user_input: str) -> Dict[str, Any]:
             context_parts.append(f"\n【基础统计】\n{stats}")
         else:
             context_parts.append(
-                "\n注意：未找到匹配的数据库数据，请基于通用知识给出分析框架和建议。"
+                "\n注意：未找到匹配的数据库数据。请如实说明暂无相关数据，"
+                "可给出分析思路框架，但严禁编造任何具体数字。"
             )
 
         context = "\n".join(context_parts)

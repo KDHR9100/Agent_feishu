@@ -273,16 +273,17 @@ class LocalMemory:
                 self._summaries[conversation_id] = db_summary
                 summary = db_summary
         recent = self.get_last_n_messages(conversation_id, n=n)
-        # 锚定摘要只填补 "窗口已放不下、但 LLM 摘要尚未触发(<=阈值)" 的空档;
-        # 超过阈值后由 LLM 摘要机制负责, 其失败时保持 None (不掩盖容错语义)
-        if summary is None:
-            history = self.get_history(conversation_id)
-            if n < len(history) <= SUMMARIZE_THRESHOLD:
-                anchor_lines = [
-                    "%s: %s" % (m.get("role"), str(m.get("content"))[:150])
-                    for m in history[:ANCHOR_KEEP_COUNT]
-                ]
-                summary = "【对话开始时的关键内容】\n" + "\n".join(anchor_lines)
+        # P10: 只要历史超出最近窗口, 就用最早的 ANCHOR_KEEP_COUNT 条消息生成确定性锚定摘要
+        # (不依赖 LLM 压缩, 中长对话与超长对话都生效), 并前置在 LLM 摘要之前,
+        # 确保用户最初的问题陈述不被 LLM 摘要的不稳定性掩盖 (M15/M16)。
+        history = self.get_history(conversation_id)
+        if n < len(history):
+            anchor_lines = [
+                "%s: %s" % (m.get("role"), str(m.get("content"))[:150])
+                for m in history[:ANCHOR_KEEP_COUNT]
+            ]
+            anchor = "【对话开始时的关键内容】\n" + "\n".join(anchor_lines)
+            summary = anchor + ("\n\n" + summary if summary else "")
         return summary, recent
 
     def add_message(self, conversation_id: str, role: str, content: str,

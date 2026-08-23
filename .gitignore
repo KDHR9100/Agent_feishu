@@ -48,6 +48,8 @@ feishu_test_output.log
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 
 # Virtual environment

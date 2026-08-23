@@ -11,16 +11,44 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 
 
 class FileParserTool:
+    # P9: CSV 编码回退链 —— utf-8 失败后依次尝试常见中文/西欧编码 (F43 GBK)
+    _CSV_ENCODINGS = ('utf-8', 'utf-8-sig', 'gbk', 'gb18030', 'latin-1')
+
+    def _read_csv_with_fallback(self, file_path: str) -> pd.DataFrame:
+        last_err = None
+        for enc in self._CSV_ENCODINGS:
+            try:
+                return pd.read_csv(file_path, encoding=enc)
+            except UnicodeDecodeError as e:
+                last_err = e
+                continue
+        raise last_err or ValueError('unable to decode csv file')
+
+    def _read_excel_all_sheets(self, file_path: str):
+        """P9: 读取全部 Sheet —— 仅读首个 Sheet 会漏掉放在后续 Sheet 的数据 (F46)。
+        返回 (合并后的 DataFrame, sheet 名列表); 单 Sheet 时与旧行为等价。"""
+        sheets = pd.read_excel(file_path, sheet_name=None)
+        names = list(sheets.keys())
+        if len(names) == 1:
+            return sheets[names[0]], names
+        frames = []
+        for name in names:
+            df = sheets[name].copy()
+            df.insert(0, '__sheet__', name)
+            frames.append(df)
+        return pd.concat(frames, ignore_index=True, sort=False), names
+
     def parse_local_file(self, file_path: str) -> Dict[str, Any]:
         if not os.path.exists(file_path):
             return {'error': f'File not found: {file_path}'}
         try:
             _, ext = os.path.splitext(file_path)
             ext_lower = ext.lower()
+            sheets_info = None
             if ext_lower in ['.xlsx', '.xls']:
-                df = pd.read_excel(file_path)
+                df, sheets_info = self._read_excel_all_sheets(file_path)
             elif ext_lower == '.csv':
-                df = pd.read_csv(file_path)
+                df = self._read_csv_with_fallback(file_path)
             elif ext_lower == '.pdf':
                 return self._parse_pdf(file_path)
             elif ext_lower == '.docx':
@@ -49,13 +77,19 @@ class FileParserTool:
                         'sample_values': df[col].dropna().unique()[:3].tolist(),
                     }
             sample_rows = df.head(3).to_dict('records')
-            return {
+            result = {
                 'columns': columns,
                 'row_count': row_count,
                 'summary': summary,
                 'sample_rows': sample_rows,
                 'file_path': file_path,
             }
+            if sheets_info and len(sheets_info) > 1:
+                result['sheets'] = sheets_info
+                result['note'] = (
+                    '该Excel包含%d个Sheet(%s), 已合并全部Sheet数据, '
+                    '首列__sheet__标注各行来源' % (len(sheets_info), ', '.join(sheets_info)))
+            return result
         except Exception as e:
             return {'error': f'Failed to parse file: {str(e)}'}
 
@@ -136,9 +170,19 @@ class FileParserTool:
             from PyPDF2 import PdfReader
         except ImportError:
             return {'error': 'PyPDF2 not installed'}
-        reader = PdfReader(file_path)
+        try:
+            reader = PdfReader(file_path)
+            pages = list(reader.pages)
+        except Exception as e:
+            # P9: 损坏/结构不全的 PDF (如缺 startxref) 给出可读诊断, 而非裸异常
+            return {
+                'columns': ['content'], 'row_count': 0, 'summary': {}, 'sample_rows': [],
+                'file_path': file_path,
+                'note': '该PDF文件结构不完整(%s), 无法提取内容; '
+                        '可能是文件损坏、导出中断或并非真正的PDF文件' % str(e)[:60],
+            }
         paragraphs = []
-        for page in reader.pages:
+        for page in pages:
             text = page.extract_text()
             if text:
                 for para in text.split('\n\n'):
@@ -157,13 +201,19 @@ class FileParserTool:
             }
         }
         sample_rows = [{'content': p[:200] + '...' if len(p) > 200 else p} for p in paragraphs[:3]]
-        return {
+        result = {
             'columns': columns,
             'row_count': row_count,
             'summary': summary,
             'sample_rows': sample_rows,
             'file_path': file_path,
         }
+        if row_count == 0:
+            # P9: 明确告知"无文字层", 而不是只说解析为空
+            result['note'] = (
+                '该PDF共%d页但未提取到任何文字, 很可能是扫描版/图片版PDF(无文字层), '
+                '建议改用OCR或提供可复制文字的PDF' % len(pages))
+        return result
 
     def _parse_word(self, file_path: str) -> Dict[str, Any]:
         try:
@@ -213,8 +263,10 @@ class FileParserTool:
             f"文件信息: {file_name}",
             f"列: {', '.join(columns)}",
             f"行数: {row_count}",
-            "数据摘要:"
         ]
+        if parse_result.get("note"):
+            content_parts.append(f"注意: {parse_result['note']}")
+        content_parts.append("数据摘要:")
         for col, info in summary.items():
             if info.get("type") == "numeric":
                 content_parts.append(

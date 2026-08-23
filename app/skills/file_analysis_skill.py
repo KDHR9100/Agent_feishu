@@ -49,6 +49,21 @@ def file_analysis_skill(
 
     # P9: 解析成功但 0 行数据 —— 显式报空, 不把空表丢给 LLM 硬分析
     if "行数: 0" in file_content:
+        # F47: 优先透传解析器附带的诊断 note (无文字层/结构损坏等), 而非泛泛的空表话术
+        note = ""
+        for ln in file_content.splitlines():
+            if ln.startswith("注意:"):
+                note = ln[len("注意:"):].strip()
+                break
+        if note:
+            return {
+                "type": "file_analysis",
+                "data": (
+                    "⚠️ 文件已收到，但未能提取到有效内容。\n"
+                    "【诊断】%s\n"
+                    "【建议】请确认文件完整无损后，导出为文字版或 CSV/Excel 格式重新上传。" % note
+                ),
+            }
         return {
             "type": "file_analysis",
             "data": (

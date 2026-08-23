@@ -114,10 +114,18 @@ def ads_skill(user_input: str):
 
     extracted_ad_id = extract_ad_id_from_input(user_input)
 
+    # 数据诚实性: 指定广告查不到时如实打标, 全店广告数据仅作参考, 防止 LLM 编造
+    requested_ad_missing = False
+    honesty_note = ""
     try:
         if extracted_ad_id:
             db_data = db_tool.get_ads_performance(ad_id=extracted_ad_id, days=30)
             if not db_data or (isinstance(db_data, list) and len(db_data) == 0):
+                requested_ad_missing = True
+                honesty_note = (
+                    "用户指定的广告【%s】在数据库中没有任何投放记录。"
+                    "下方 database_data 是全店其他广告的参考数据, 不是该广告的数据。" % extracted_ad_id
+                )
                 db_data = db_tool.get_ads_performance(days=7)
         else:
             db_data = db_tool.get_ads_performance(days=7)
@@ -196,6 +204,8 @@ def ads_skill(user_input: str):
         },
         "platform_comparison": platform_comparison,
         "extracted_ad_id": extracted_ad_id,
+        "requested_ad_missing": requested_ad_missing,
+        "honesty_note": honesty_note,
         "user_input": user_input,
     }
 

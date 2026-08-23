@@ -1,0 +1,6 @@
+sku,product_name,category,sales_volume,revenue,cost,inventory,avg_price,date
+SKU001,Wireless Headphones,Electronics,1200,144000.0,72000.0,500,120.0,2026-08-18
+SKU002,Smart Watch,Electronics,850,170000.0,85000.0,300,200.0,2026-08-18
+SKU003,Leather Wallet,Accessories,2500,50000.0,15000.0,1000,20.0,2026-08-18
+SKU004,Cotton T-Shirt,Clothing,5000,75000.0,25000.0,2000,15.0,2026-08-18
+SKU005,Stainless Steel Water Bottle,Home Goods,1800,54000.0,18000.0,600,30.0,2026-08-18

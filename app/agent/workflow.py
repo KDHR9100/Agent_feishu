@@ -430,8 +430,40 @@ def _accumulate_token_usage(state, delta):
     state["token_usage"] = cur
 
 
+# P10: 上下文依赖追问标记 —— 命中时把历史摘要注入技能输入, 让技能能"回忆"早期对话
+_CONTEXTUAL_MARKS = (
+    "最一开始", "一开始", "最开始", "最初", "最早", "第一个", "首个", "首次",
+    "第一次", "刚才", "前面", "上文", "之前问", "我问", "你之前", "我们聊",
+)
+
+
+def _enrich_input_with_history(user_input, state):
+    """P10: 用户追问早期对话内容 (如 "我最一开始问的那个SKU是什么") 时,
+    把历史摘要/锚定内容前置到技能输入, 避免技能因无上下文而臆测。"""
+    if not user_input:
+        return user_input
+    if not any(m in user_input for m in _CONTEXTUAL_MARKS):
+        return user_input
+    parts = []
+    summary = state.get("history_summary")
+    if summary:
+        parts.append("[历史对话摘要]\n%s" % summary)
+    if not parts:
+        # 无摘要时退回最近对话的前两条用户消息, 至少保留"开头"信息
+        history = state.get("history") or []
+        first_user = [m.get("content", "") for m in history
+                      if m.get("role") == "user"][:2]
+        if first_user:
+            parts.append("[对话开头用户消息]\n" + "\n".join(first_user))
+    if not parts:
+        return user_input
+    logger.info("[skill_executor] contextual query, injecting history context")
+    return "\n\n".join(parts) + "\n\n[用户当前问题]\n" + user_input
+
+
 def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_result, state):
     """执行单个技能, 返回结果"""
+    user_input = _enrich_input_with_history(user_input, state)
     skill_start = time.time()
     # L4 旁路增强: 可执行技能 (is_executable) 先经沙盒计算, 再走 executor 审批闭环,
     # 绝不直接输出文本了事; 审批链路复用 ApprovalManager, 与既有技能注册机制互不干扰。
@@ -930,7 +962,11 @@ def _extract_text_from_result(result_obj):
     return strip_thinking(text) or str(result_obj)
 
 
-_APPROVAL_FOLLOWUP_MARKS = ("审批", "批准", "批复", "通过了吗", "执行了没")
+_APPROVAL_FOLLOWUP_MARKS = (
+    "审批", "批准", "批复", "通过了吗", "执行了没",
+    # AP33b: 追问执行进展的变体句式 ("刚才那个降价怎么还没执行？")
+    "还没执行", "没执行", "怎么还没", "执行成功", "执行结果", "审批单",
+)
 
 
 def _approval_followup_context(state) -> str:
@@ -946,6 +982,33 @@ def _approval_followup_context(state) -> str:
         return ""
 
 
+def _deterministic_approval_answer(state) -> str:
+    """P6(AP33b): 追问审批进展且台账已有明确裁决时, 返回确定性状态答复。
+    单技能路径的回答在技能内已生成(看不到审批状态), 事后附加记录无法纠正
+    "等待审批中"之类的错误话术, 故直接用台账事实覆盖。无明确裁决返回空串。"""
+    user_input = state.get("user_input", "") or ""
+    if not any(m in user_input for m in _APPROVAL_FOLLOWUP_MARKS):
+        return ""
+    try:
+        from app.utils.approval import approval_manager
+        items = approval_manager.recent_approvals(state.get("conversation_id", ""), limit=1)
+    except Exception:
+        return ""
+    if not items:
+        return ""
+    e = items[0]
+    desc = (e.get("description") or e.get("action_name") or "该操作")[:60]
+    if e.get("executed"):
+        return "您刚才的操作「%s」已批准并执行完成。" % desc
+    status = e.get("status")
+    if status == "rejected":
+        return ("您刚才的操作「%s」已被拒绝，未执行。"
+                "如需继续，可调整方案后重新发起请求。" % desc)
+    if status == "approved":
+        return "您刚才的操作「%s」已批准，正在等待执行。" % desc
+    return ""
+
+
 @trace_node("answer")
 def answer_node(state):
     results = state.get("skill_results") or []
@@ -958,9 +1021,14 @@ def answer_node(state):
         answer = strip_thinking(answer_text) or str(single)
         # P6: 追问审批状态时附上真实审批记录 (新发起的审批卡片响应不重复附加)
         if not (isinstance(single, dict) and single.get("type") == "approval_required"):
-            approval_ctx = _approval_followup_context(state)
-            if approval_ctx:
-                answer = approval_ctx + "\n\n" + answer
+            # AP33b: 台账已有明确裁决时, 用确定性状态答复覆盖技能回答
+            det = _deterministic_approval_answer(state)
+            if det:
+                answer = det
+            else:
+                approval_ctx = _approval_followup_context(state)
+                if approval_ctx:
+                    answer = approval_ctx + "\n\n" + answer
         state["answer"] = answer
         return state
 

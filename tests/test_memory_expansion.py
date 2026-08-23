@@ -83,7 +83,9 @@ class TestSummarization:
             self.memory.add_message(self.cid, "user", f"msg_{i}")
 
         summary, recent = self.memory.get_context(self.cid)
-        assert summary is None
+        # P10: LLM 摘要失败时不崩溃; 确定性锚定摘要不依赖 LLM, 仍应保留对话开头内容
+        assert summary is not None and "对话开始时的关键内容" in summary
+        assert "msg_0" in summary
         assert len(recent) == RECENT_KEEP_COUNT
 
     @patch("app.config.get_llm")

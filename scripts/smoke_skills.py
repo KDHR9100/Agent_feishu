@@ -12,7 +12,6 @@ import importlib
 import inspect
 import json
 import os
-import sqlite3
 import sys
 import time
 import traceback
@@ -40,30 +39,26 @@ TEST_INPUTS = {
 
 
 def check_db():
-    """前置检查: 数据库表是否有种子数据, 空则初始化"""
-    from app.config import config
-    db_url = getattr(config, "DATABASE_URL", "") or os.environ.get(
-        "DATABASE_URL", "sqlite:///./feishu_agent.db"
-    )
-    db_file = db_url.replace("sqlite:///", "")
-    need_init = True
-    if os.path.exists(db_file):
-        try:
-            conn = sqlite3.connect(db_file)
-            rows = conn.execute("SELECT COUNT(*) FROM product_sales").fetchone()[0]
-            ads = conn.execute("SELECT COUNT(*) FROM ads_performance").fetchone()[0]
-            conn.close()
-            print("[prereq] DB %s: product_sales=%d, ads_performance=%d" % (db_file, rows, ads))
-            need_init = rows == 0
-        except Exception as e:
-            print("[prereq] DB check failed: %s" % e)
+    """前置检查: CSV 数据文件是否有种子数据, 空则初始化"""
+    data_dir = os.path.join(ROOT, "data")
+    products_csv = os.path.join(data_dir, "product_sales.csv")
+    ads_csv = os.path.join(data_dir, "ads_performance.csv")
+
+    need_init = not os.path.exists(products_csv) or not os.path.exists(ads_csv)
+    if not need_init:
+        import csv as _csv
+        with open(products_csv, encoding="utf-8") as f:
+            rows = sum(1 for _ in _csv.DictReader(f))
+        with open(ads_csv, encoding="utf-8") as f:
+            ads = sum(1 for _ in _csv.DictReader(f))
+        print("[prereq] CSV data: product_sales=%d, ads_performance=%d" % (rows, ads))
+        need_init = rows == 0
+
     if need_init:
-        print("[prereq] DB empty or missing, running scripts/init_db.py ...")
-        from app.models import init_db
-        from scripts.init_db import seed_database
-        init_db()
-        seed_database()
-        print("[prereq] DB seeded")
+        print("[prereq] CSV data missing or empty, running seed ...")
+        from scripts.init_db import seed_csv_data
+        seed_csv_data()
+        print("[prereq] CSV data seeded")
 
 
 def check_llm():

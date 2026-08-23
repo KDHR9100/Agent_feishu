@@ -185,6 +185,9 @@ class ApprovalManager:
         """P6: 查询最近审批记录 (含 pending); 会话维度无记录时退回全局最近记录"""
         with self._lock:
             resolved = list(self._recent)
+            # AP33b: resolve() 记录台账后, wait_decision 才清理 _pending, 存在窗口期
+            # 同一审批单会同时出现在两处; 已裁决(入台账)的单子不再展示过期的 pending 态
+            resolved_ids = {r.get("approval_id") for r in resolved}
             pending = [
                 {
                     "approval_id": aid,
@@ -197,6 +200,7 @@ class ApprovalManager:
                     "executed": False,
                 }
                 for aid, e in self._pending.items()
+                if aid not in resolved_ids
             ]
         items = resolved + pending
 

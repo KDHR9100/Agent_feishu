@@ -77,8 +77,10 @@ class TestAnswerNodeInjection:
             ],
         }
         out = answer_node(state)
-        assert "最近审批记录" in out["answer"]
-        assert "已拒绝" in out["answer"]
+        # AP33b 修复后: 台账已有明确裁决时直接用确定性状态答复覆盖, 不再仅前置记录
+        assert "已被拒绝" in out["answer"]
+        assert "未执行" in out["answer"]
+        assert "等待审批中" not in out["answer"]
 
     def test_no_followup_no_injection(self):
         from app.agent.workflow import answer_node
