@@ -119,16 +119,16 @@ def ads_skill(user_input: str):
     honesty_note = ""
     try:
         if extracted_ad_id:
-            db_data = db_tool.get_ads_performance(ad_id=extracted_ad_id, days=30)
+            db_data = db_tool.get_ads_performance(ad_id=extracted_ad_id, days=180)
             if not db_data or (isinstance(db_data, list) and len(db_data) == 0):
                 requested_ad_missing = True
                 honesty_note = (
                     "用户指定的广告【%s】在数据库中没有任何投放记录。"
                     "下方 database_data 是全店其他广告的参考数据, 不是该广告的数据。" % extracted_ad_id
                 )
-                db_data = db_tool.get_ads_performance(days=7)
+                db_data = db_tool.get_ads_performance(days=180)
         else:
-            db_data = db_tool.get_ads_performance(days=7)
+            db_data = db_tool.get_ads_performance(days=180)
 
         platform_data = db_tool.get_ads_by_platform()
         campaign_data = db_tool.get_campaign_performance()
