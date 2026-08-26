@@ -11,6 +11,8 @@ def extract_sku_from_input(user_input: str) -> Optional[str]:
     # 捕获完整 SKU 词元 (含 "SKU" 前缀), 如 SKU001 / SKU-A001 / SKU-XXXX
     patterns = [
         r"(SKU[-_]?[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*)",
+        # 兼容 "SKU HY00000637" / "SKU: HY00000637" 空格/冒号分隔写法, 返回编码本身
+        r"SKU[\s:：]+([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*)",
     ]
     for pattern in patterns:
         match = re.search(pattern, user_input, re.IGNORECASE)

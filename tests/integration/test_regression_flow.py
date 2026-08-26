@@ -38,20 +38,20 @@ class TestCoreSkillRouting:
 
 
 class TestAllSkillsRegistered:
-    """确保全部技能在 manifest 和 router 中注册 (L4 新增 pricing_skill 后共 13 个)"""
+    """确保全部技能在 manifest 和 router 中注册 (新增 listing 后共 14 个)"""
 
     def test_manifest_has_12_skills(self):
         from app.mcp_server import skill_registry
-        assert skill_registry.skill_count == 13
+        assert skill_registry.skill_count == 14
 
     def test_router_tools_has_12(self):
         from app.agent import router
         router._ensure_tools_fresh()
-        assert len(router._cache["tools"]) == 13
+        assert len(router._cache["tools"]) == 14
 
     def test_skill_registry_has_12(self):
         from app.agent.workflow import SKILL_REGISTRY
-        assert len(SKILL_REGISTRY) == 13
+        assert len(SKILL_REGISTRY) == 14
 
     def test_all_manifest_skills_in_workflow_registry(self):
         """manifest 中的每个技能都必须在 workflow SKILL_REGISTRY 中有执行函数"""

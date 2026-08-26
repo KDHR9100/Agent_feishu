@@ -19,8 +19,8 @@ class TestSkillsManifest:
         with open(manifest_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         assert "skills" in data
-        # L4: 新增 pricing_skill 后共 13 个技能
-        assert len(data["skills"]) == 13
+        # L4: 新增 pricing_skill + listing 后共 14 个技能
+        assert len(data["skills"]) == 14
 
     def test_all_skills_have_required_fields(self):
         manifest_path = os.path.join(
@@ -42,13 +42,13 @@ class TestSkillRegistry:
     def test_registry_loads_skills(self):
         from app.mcp_server.registry import SkillRegistry
         reg = SkillRegistry()
-        assert reg.skill_count == 13
+        assert reg.skill_count == 14
 
     def test_list_tools_returns_all(self):
         from app.mcp_server.registry import SkillRegistry
         reg = SkillRegistry()
         tools = reg.list_tools()
-        assert len(tools) == 13
+        assert len(tools) == 14
         names = {t["name"] for t in tools}
         assert "product_skill" in names
         assert "ads_skill" in names
@@ -61,6 +61,7 @@ class TestSkillRegistry:
         assert "product_skill" in rules
         assert "广告" in rules["ads_skill"]
         assert "库存" in rules["inventory_skill"]
+        assert "listing" in rules
 
     def test_get_skill_by_name(self):
         from app.mcp_server.registry import SkillRegistry
@@ -79,9 +80,10 @@ class TestSkillRegistry:
         from app.mcp_server.registry import SkillRegistry
         reg = SkillRegistry()
         names = reg.get_all_skill_names()
-        assert len(names) == 13
+        assert len(names) == 14
         assert "data_analysis_skill" in names
         assert "pricing_skill" in names
+        assert "listing" in names
 
     def test_register_skill_runtime(self):
         from app.mcp_server.registry import SkillRegistry
@@ -100,9 +102,9 @@ class TestSkillRegistry:
         from app.mcp_server.registry import SkillRegistry
         reg = SkillRegistry()
         reg.register_skill({"name": "temp_skill", "keywords": []})
-        assert reg.skill_count == 14
+        assert reg.skill_count == 15
         reg.reload()
-        assert reg.skill_count == 13  # reload resets to manifest
+        assert reg.skill_count == 14  # reload resets to manifest
 
     def test_invalid_manifest_graceful(self):
         from app.mcp_server.registry import SkillRegistry
@@ -117,12 +119,12 @@ class TestRouterDynamicLoading:
         from app.agent.router import KEYWORD_RULES
         assert "product_skill" in KEYWORD_RULES
         assert "ads_skill" in KEYWORD_RULES
-        assert len(KEYWORD_RULES) == 13
+        assert len(KEYWORD_RULES) == 14
 
     def test_router_tools_count(self):
         from app.agent.router import _build_tools
-        # L4: +pricing_skill 共 13 个
-        assert len(_build_tools()) == 13
+        # L4: +pricing_skill +listing 共 14 个
+        assert len(_build_tools()) == 14
 
     def test_router_keyword_fallback(self):
         from app.agent.router import keyword_fallback

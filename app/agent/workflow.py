@@ -301,6 +301,12 @@ def _run_pricing_skill(user_input, file_path, file_content, tool_result):
     return pricing_skill(user_input)
 
 
+def _run_listing_skill(user_input, file_path, file_content, tool_result):
+    # Listing 生成: 调用外部 CrossLister 微服务, 返回已格式化的文本
+    from app.skills.listing_skill import listing_skill
+    return {"type": "listing", "data": {"response": listing_skill(user_input)}}
+
+
 # L4: 可执行技能集合 — skill_executor 对这些技能产出的 execution_request 走 executor 审批闭环
 EXECUTABLE_SKILLS = {"pricing_skill"}
 
@@ -319,6 +325,7 @@ SKILL_REGISTRY = {
     "support_skill": _run_support_skill,
     "data_analysis_skill": _run_data_analysis_skill,
     "pricing_skill": _run_pricing_skill,
+    "listing": _run_listing_skill,
 }
 
 

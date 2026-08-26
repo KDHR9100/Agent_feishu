@@ -167,6 +167,21 @@
       "function": "help_skill"
     },
     {
+      "name": "listing",
+      "description": "基于商品图片生成多语言合规 Listing（标题、五点描述、商品描述、后台关键词）",
+      "keywords": [
+        "listing",
+        "标题",
+        "描述",
+        "商品详情",
+        "重新生成",
+        "图片生成"
+      ],
+      "skill_func": "app.skills.listing_skill.listing_skill",
+      "module": "app.skills.listing_skill",
+      "function": "listing_skill"
+    },
+    {
       "name": "pricing_skill",
       "description": "L4 损益优化沙盒智能定价：活动定价、调价建议，用蒙特卡洛模拟给出最优价格、ROI 提升幅度与置信区间。不处理竞品情报收集（属于 competitor_skill）。",
       "keywords": [
