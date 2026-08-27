@@ -11,8 +11,8 @@ class TestSkillAwareGate:
     def test_non_executable_skills_never_gated(self):
         from app.utils import approval
         with patch.object(approval, "APPROVAL_ENABLED", True):
-            # 创作/分析技能命中高危关键词也不门控 (P1: T02/T10/T11/R2)
-            assert approval.should_gate("content_skill", "帮我写一段双11降价促销的文案") is False
+            # 分析/查询技能命中高危关键词也不门控 (P1: T02/T10/T11/R2)
+            assert approval.should_gate("ads_skill", "降价促销的广告投放效果怎么样") is False
             assert approval.should_gate("competitor_skill", "竞品降价了，要不要跟进降价？") is False
             assert approval.should_gate("inventory_skill", "清仓的商品有哪些") is False
             assert approval.should_gate("report_skill", "出一份打折促销周报") is False
@@ -33,7 +33,7 @@ class TestSkillAwareGate:
         from app.utils import approval
         with patch.object(approval, "APPROVAL_ENABLED", False):
             assert approval.should_gate("pricing_skill", "降价到99元") is False
-            assert approval.should_gate("content_skill", "降价促销文案") is False
+            assert approval.should_gate("ads_skill", "降价促销广告") is False
 
     def test_requires_approval_skills_still_forces_gate(self):
         from app.utils import approval

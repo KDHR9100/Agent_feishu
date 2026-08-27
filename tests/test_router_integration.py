@@ -23,7 +23,6 @@ pytestmark = pytest.mark.skipif(
 ROUTING_CASES = [
     ("帮我分析一下商品销量趋势", "product_skill"),
     ("广告投放的ROI怎么样", "ads_skill"),
-    ("帮我写一段营销文案", "content_skill"),
     ("库存预警有哪些商品", "inventory_skill"),
     ("竞品分析怎么做", "competitor_skill"),
     ("生成本周运营报告", "report_skill"),

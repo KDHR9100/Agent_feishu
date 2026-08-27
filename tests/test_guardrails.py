@@ -26,7 +26,7 @@ class TestGuardrails:
         assert result["message"] is not None
 
     def test_ecommerce_query_allowed(self):
-        queries = ["商品销量怎么样", "广告投放ROI多少", "帮我写一段营销文案", "库存还有多少"]
+        queries = ["商品销量怎么样", "广告投放ROI多少", "帮我生成商品Listing", "库存还有多少"]
         for q in queries:
             result = check_input(q)
             assert result["action"] == "allow", f"Should allow: {q}"

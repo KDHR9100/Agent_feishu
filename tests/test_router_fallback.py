@@ -62,9 +62,9 @@ class TestRouterFallback:
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = mock_response
         mock_get_llm.return_value = mock_llm
-        state = self._make_state("帮我写一段营销文案")
+        state = self._make_state("佣金规则是什么")
         result = router(state)
-        assert result["intent"] == "content_skill"
+        assert result["intent"] == "rag_skill"
 
     @patch("app.agent.router._get_llm_with_tools")
     def test_llm_success_unchanged(self, mock_get_llm):

@@ -1,6 +1,6 @@
 # Ecommerce Agent
 
-基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库（时间衰减）、文件解析、多轮对话记忆（60 条热窗口 + SQLite 全量归档 + LLM 摘要持久化）、Guardrails 安全防护、MCP 动态技能热插拔、Plan-Execute 顺序规划、高危操作飞书审批、回滚登记持久化（重启不丢安全保证）、多模态图片解析、全链路 Token 追踪等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
+基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库（时间衰减）、文件解析、多轮对话记忆（60 条热窗口 + SQLite 全量归档 + LLM 摘要持久化）、Guardrails 安全防护、MCP 动态技能热插拔、Plan-Execute 顺序规划、高危操作飞书审批（问价咨询与调价执行严格分离：调价必须点审批卡片确认后才执行）、回滚登记持久化（重启不丢安全保证）、多模态图片解析、全链路 Token 追踪等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
 
 ---
 
@@ -105,7 +105,7 @@ feishu_tool.reply_message() --- 回复用户
 | load_file | 若有文件路径，调用 file_parser_tool 解析文件 |
 | router | 意图识别 + 技能路由，输出 skills_to_execute 列表（支持多技能） |
 | planner | 多技能时生成顺序执行计划 execution_plan（Step JSON，禁止并行 fan-out）；单技能跳过 |
-| skill_executor | 按 execution_plan 顺序执行技能；高危指令（降价/打折等）走审批门非阻塞挂起 |
+| skill_executor | 按 execution_plan 顺序执行技能；定价区分问价咨询（只给建议）与调价执行（明示指令走审批门），高危指令非阻塞挂起 |
 | reflect | ReAct 反思：LLM 判断技能结果是否充分 |
 | answer | 单结果直接提取；多结果调用 LLM 综合生成连贯回答 |
 | save_history | 将用户输入和最终回答写入 LocalMemory |
@@ -158,17 +158,17 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 |---|--------|------|-----------|---------|
 | 1 | product_skill | 商品销售数据分析、趋势、利润率、SKU 对比 | 商品、销量、SKU、评价、卖得 | DB 查询 + 趋势/利润计算 + LLM 报告 |
 | 2 | ads_skill | 广告投放效果、ROI/CTR/CPC、渠道对比 | 广告、投放、ROI、推广、花费、渠道 | DB 查询 + 指标计算 + 平台对比 + LLM |
-| 3 | content_skill | 多平台营销文案（抖音/淘宝/小红书/微信/拼多多） | 文案、活动策划、营销、写一段 | 检测平台+模板 + LLM 生成 |
-| 4 | inventory_skill | 库存预警、补货建议、周转分析 | 库存、补货、预警、周转、缺货 | DB 全量查询 + 按品类阈值检测 |
-| 5 | competitor_skill | 竞品分析、市场竞争情报 | 竞品、竞争、对手、市场情报 | LLM 直接回答（截断 500 字符） |
-| 6 | report_skill | 运营报告生成并保存为 Markdown | 报告、周报、月报、汇总 | LLM 总结 + file_tool 写入 reports/ |
-| 7 | rag_skill | 知识库检索增强问答 | 规则、佣金、上架、平台规则、怎么算 | 混合检索 + LLM 生成 |
-| 8 | seo_skill | SEO 优化、关键词研究、标题优化 | SEO、关键词、搜索量、标题优化、长尾词 | keyword_tool 查询 + LLM 分析 |
-| 9 | support_skill | 客服：订单查询、退换货、物流、售后 | 订单、退款、退货、售后、客服、物流 | 意图分类 + ticket_tool + LLM |
-| 10 | data_analysis_skill | 深度数据分析、趋势、异常检测 | 趋势、异常、同比、环比、统计 | DB 查询 + 基础统计 + LLM 专业分析 |
-| 11 | file_analysis_skill | 文件解析分析报告 | 解析文件、分析文件、这个表格、这份数据 | 已解析 file_content + LLM 结构化报告 |
-| 12 | help_skill | 使用帮助、功能介绍 | 帮助、你能做什么、功能、怎么用 | HELP_PROMPT + LLM |
-| 13 | pricing_skill | L4 智能定价：活动定价/调价建议，蒙特卡洛模拟给出最优价、ROI 提升与置信区间 | 定价、活动价、调价、双11价、卖多少钱 | profit_model + solver_engine 蒙特卡洛模拟 |
+| 3 | inventory_skill | 库存预警、补货建议、周转分析 | 库存、补货、预警、周转、缺货 | DB 全量查询 + 按品类阈值检测 |
+| 4 | competitor_skill | 竞品分析、市场竞争情报 | 竞品、竞争、对手、市场情报 | LLM 直接回答（截断 500 字符） |
+| 5 | report_skill | 运营报告生成并保存为 Markdown | 报告、周报、月报、汇总 | LLM 总结 + file_tool 写入 reports/ |
+| 6 | rag_skill | 知识库检索增强问答 | 规则、佣金、上架、平台规则、怎么算 | 混合检索 + LLM 生成 |
+| 7 | seo_skill | SEO 优化、关键词研究、标题优化 | SEO、关键词、搜索量、标题优化、长尾词 | keyword_tool 查询 + LLM 分析 |
+| 8 | support_skill | 客服：订单查询、退换货、物流、售后 | 订单、退款、退货、售后、客服、物流 | 意图分类 + ticket_tool + LLM |
+| 9 | data_analysis_skill | 深度数据分析、趋势、异常检测 | 趋势、异常、同比、环比、统计 | DB 查询 + 基础统计 + LLM 专业分析 |
+| 10 | file_analysis_skill | 文件解析分析报告 | 解析文件、分析文件、这个表格、这份数据 | 已解析 file_content + LLM 结构化报告 |
+| 11 | help_skill | 使用帮助、功能介绍 | 帮助、你能做什么、功能、怎么用 | HELP_PROMPT + LLM |
+| 12 | listing | Listing 生成：商品图片 → 多语言合规标题/五点描述/商品描述/后台关键词（含违禁词合规审核） | listing、标题、描述、商品详情、重新生成 | 多模态图片识别 + 平台规则 + 合规审核 |
+| 13 | pricing_skill | L4 智能定价（问价/调价分离）：问价咨询（"卖多少钱合适"）只输出蒙特卡洛沙盒测算建议，不改价；明示调价指令（目标价/涨跌幅/折扣）才生成执行请求走飞书审批，点卡片确认后才执行；批量调价直接拒绝 | 定价、活动价、调价、卖多少钱、降价 20% | profit_model + solver_engine 蒙特卡洛模拟 + 审批门 |
 
 库存预警阈值（按品类）：electronics: 50, clothing: 100, food: 100, beauty: 200, 默认: 100
 
@@ -264,7 +264,7 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 - Average latency: 11ms
 
 LLM-as-Judge 评估（app/eval/llm_judge.py）：
-- Routing 评估：8 个问题覆盖 8 个技能路由，测路由准确率 + 延迟
+- Routing 评估：7 个问题覆盖 7 个技能路由，测路由准确率 + 延迟
 - Judge 评估：LLM 打分 1-5 分，三个维度（relevance / accuracy / completeness）
 
 ### 5.10 时间衰减排序
@@ -668,7 +668,7 @@ docker compose down
 
 ## 16. 单元测试
 
-共 46 个测试文件、496 个用例（492 passed / 4 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪、定价/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
+共 46 个测试文件、505 个用例（502 passed / 3 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪、定价（问价咨询/调价执行分离）/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
 
 ### 共享 Fixture（conftest.py）
 
@@ -806,7 +806,7 @@ GitHub Actions（.github/workflows/ci.yml）：
 | VLM | VLM_API_KEY/BASE/MODEL_NAME | 复用 LLM_* | 多模态视觉模型 |
 | LLM 供应商 | LLM_PROVIDER | 自动检测 | DashScope/OpenAI |
 | API 鉴权 | API_KEY | "" | HTTP 接口 X-API-Key，**必填**；未配置时受保护端点默认拒绝（fail-closed） |
-| 审批门 | APPROVAL_ENABLED | false | 高危操作（降价/打折等）飞书审批开关 |
+| 审批门 | APPROVAL_ENABLED | false | 高危操作（降价/打折等关键词触发）飞书审批开关。注意：定价技能的明示调价执行指令（update_price）无论本开关如何，始终强制走审批卡片确认后才执行 |
 | 审批操作者白名单 | APPROVAL_OPERATORS | "" | 飞书 open_id 逗号分隔；启用审批门时必填，仅名单内用户可批准/拒绝/点选决策 |
 | 每用户限流 | RATE_LIMIT_PER_MINUTE | 30 | 滑动窗口限流（次/分钟），/chat 与飞书入口生效，超限返回 429/提示 |
 | 真实执行模式 | EXECUTOR_REAL_MODE | false | true 时执行器对接真实店铺平台（当前适配器为预留实现） |

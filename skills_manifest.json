@@ -33,19 +33,6 @@
       "function": "ads_skill"
     },
     {
-      "name": "content_skill",
-      "description": "生成营销文案、商品描述、推广内容等",
-      "keywords": [
-        "文案",
-        "活动策划",
-        "营销",
-        "推广文案",
-        "写一段"
-      ],
-      "module": "app.skills.content_skill",
-      "function": "content_skill"
-    },
-    {
       "name": "inventory_skill",
       "description": "分析库存数据、库存预警、补货建议等",
       "keywords": [

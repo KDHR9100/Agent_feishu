@@ -86,9 +86,9 @@ class TestAnswerNodeInjection:
         from app.agent.workflow import answer_node
         state = {
             "conversation_id": _uniq_conv("conv-normal"),
-            "user_input": "帮我写一段促销文案",
+            "user_input": "帮我优化商品标题",
             "skill_results": [
-                {"skill": "content_skill", "result": {"type": "text", "data": "这是文案内容"}},
+                {"skill": "seo_skill", "result": {"type": "text", "data": "这是优化后的标题"}},
             ],
         }
         out = answer_node(state)

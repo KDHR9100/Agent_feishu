@@ -155,9 +155,6 @@ TEXT_CASES = [
     ("T01", "SKU-A001快缺货了，顺便看看这个商品最近的销量和评价",
      "既关注缺货风险又想看销量评价, 库存或商品技能均可, 但回答应兼顾两者",
      ["inventory_skill", "product_skill"], None, None),
-    ("T02", "帮我写一段双11降价促销的文案",
-     "生成促销文案(创作需求), 不应触发改价审批流",
-     ["content_skill"], None, ["已发送审批卡片"]),
     ("T03", "竞品把价格杀到99了，我们要不要跟价？",
      "竞品降价应对策略分析",
      ["competitor_skill", "pricing_skill", "data_analysis_skill"], None, None),
@@ -244,8 +241,6 @@ def phase_mem():
               conv=c, expect=["product_skill"])
     chat_case("M14b", "那它的利润率呢？", "代词指代上文商品, 仍答该SKU利润率",
               conv=c, expect=["product_skill", "data_analysis_skill"])
-    chat_case("M14c", "给它写一段推广文案", "基于上文商品写文案",
-              conv=c, expect=["content_skill"])
 
     c2 = "probe_mem_topic_%s" % RUN_ID
     chat_case("M17a", "SKU-A001的销量怎么样？", "话题1: 商品", conv=c2,
@@ -705,8 +700,7 @@ def phase_rl():
 
     time.sleep(5)  # 冷却避免 429 污染后续用例
     qs = [("probe_c52a_%s" % RUN_ID, "哪些商品库存告急？", "inventory_skill"),
-          ("probe_c52b_%s" % RUN_ID, "昨天广告ROI多少？", "ads_skill"),
-          ("probe_c52c_%s" % RUN_ID, "写一段小红书文案", "content_skill")]
+          ("probe_c52b_%s" % RUN_ID, "昨天广告ROI多少？", "ads_skill")]
 
     def ask(item):
         c, m, _ = item
@@ -722,7 +716,7 @@ def phase_rl():
         ok = bool(resp) and intent == exp_intent
         all_ok = all_ok and ok
         detail.append("%s->%s(%s)" % (m[:6], intent, "ok" if ok else "期望%s" % exp_intent))
-    record({"sid": "C52", "phase": "rl", "goal": "3并发不同会话互不串话且路由正确",
+    record({"sid": "C52", "phase": "rl", "goal": "2并发不同会话互不串话且路由正确",
             "passed": all_ok, "reason": "; ".join(detail)})
 
     conv = "probe_c54_%s" % RUN_ID

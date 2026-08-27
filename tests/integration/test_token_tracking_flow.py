@@ -31,8 +31,8 @@ class TestTokenTrackingFlow:
             ("inventory_skill", 180, 90),
             ("ads_skill", 300, 150),
             ("ads_skill", 250, 120),
-            ("content_skill", 500, 400),
-            ("content_skill", 450, 380),
+            ("pricing_skill", 500, 400),
+            ("pricing_skill", 450, 380),
             ("product_skill", 150, 80),
             ("report_skill", 600, 500),
             ("seo_skill", 220, 110),
@@ -75,7 +75,7 @@ class TestTokenTrackingFlow:
 
         # 验证: 分技能统计
         skill_map = {r.skill_name: r.total_tokens for r in rows}
-        assert skill_map["content_skill"] == 500 + 400 + 450 + 380  # 1730
+        assert skill_map["pricing_skill"] == 500 + 400 + 450 + 380  # 1730
         assert skill_map["report_skill"] == 600 + 500  # 1100
         assert skill_map["inventory_skill"] == 200 + 100 + 180 + 90  # 570
 
@@ -108,7 +108,7 @@ class TestTokenTrackingFlow:
         stats = MonitoringStats()
         stats.record_token_usage("ads_skill", 100, 50, "conv-1")
         stats.record_token_usage("ads_skill", 200, 80, "conv-2")
-        stats.record_token_usage("content_skill", 300, 250, "conv-3")
+        stats.record_token_usage("pricing_skill", 300, 250, "conv-3")
 
         # 重新 patch 为新的 session
         mock_session_cls.return_value = TestSession()
@@ -119,9 +119,9 @@ class TestTokenTrackingFlow:
         assert len(result["skill_ranking"]) >= 2
 
         # ads_skill 应该排在前面(380 tokens vs 550 tokens)
-        # 实际上 content_skill=550 > ads_skill=380
+        # 实际上 pricing_skill=550 > ads_skill=380
         ranking = result["skill_ranking"]
-        assert ranking[0]["skill_name"] == "content_skill"
+        assert ranking[0]["skill_name"] == "pricing_skill"
         assert ranking[0]["total_tokens"] == 550
 
     def test_metrics_endpoint_structure(self):

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""端到端冒烟测试: 真实调用 skills_manifest.json 中的全部 13 个技能。
+"""端到端冒烟测试: 真实调用 skills_manifest.json 中的全部 12 个技能。
 
 用法:
     python scripts/smoke_skills.py          # 跑全部技能
@@ -24,7 +24,6 @@ os.chdir(ROOT)
 TEST_INPUTS = {
     "product_skill": "帮我分析 SKU001 无线耳机的销量表现和利润率",
     "ads_skill": "最近广告投放的 ROI 怎么样？各渠道花费和转化对比一下",
-    "content_skill": "为无线蓝牙耳机写一段小红书种草文案，突出降噪和续航",
     "inventory_skill": "检查一下库存预警，哪些商品库存低需要补货",
     "competitor_skill": "帮我做一份无线耳机市场的竞品分析，重点是价格和卖点",
     "report_skill": "生成一份本周电商运营周报",

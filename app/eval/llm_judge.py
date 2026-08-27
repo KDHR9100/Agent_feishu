@@ -37,11 +37,6 @@ EVAL_SET = [
         "reference_keywords": ["ROI", "广告", "投放"],
     },
     {
-        "question": "帮我写一段营销文案",
-        "expected_skill": "content_skill",
-        "reference_keywords": ["文案", "营销"],
-    },
-    {
         "question": "库存预警有哪些商品",
         "expected_skill": "inventory_skill",
         "reference_keywords": ["库存", "预警"],

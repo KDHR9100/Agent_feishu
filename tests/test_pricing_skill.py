@@ -44,13 +44,24 @@ def test_pricing_skill_output_format():
     assert "蒙特卡洛" in text
 
 
-def test_pricing_skill_execution_request():
+def test_pricing_consultation_not_executable():
+    """'帮我定价' 是咨询问句: 只给建议, 绝不生成改价执行请求(问价≠调价)"""
     result = pricing_skill("当前售价 99，竞品均价 105，帮我定价")
+    assert result["is_executable"] is False
+    assert result["execution_request"] is None
+    text = result["data"]["analysis"]
+    assert "咨询模式" in text or "建议模式" in text
+    assert "未发起任何调价操作" in text
+
+
+def test_pricing_explicit_directive_execution_request():
+    """明示调价指令(目标价): 才可执行, 生成 update_price 请求"""
+    result = pricing_skill("当前售价 99，竞品均价 105，调价到 89")
     assert result["is_executable"] is True
     req = result["execution_request"]
     assert req["action"] == "update_price"
     assert req["params"]["old_price"] == 99.0
-    assert req["params"]["new_price"] > 0
+    assert req["params"]["new_price"] == 89.0
     assert "description" in req
 
 
@@ -141,13 +152,13 @@ def test_target_price_override():
     assert "按您的指示" in result["data"]["analysis"]
 
 
-def test_no_target_price_keeps_optimizer_best():
-    """未明示目标价时保持原优化行为: 执行价 = 沙盒最优价"""
+def test_no_directive_stays_advice_mode():
+    """未明示调价指令时: 只输出沙盒测算建议, 不产生任何执行请求"""
     from app.skills.pricing_skill import pricing_skill
     result = pricing_skill("帮我定个价")
-    params = result["execution_request"]["params"]
+    assert result["is_executable"] is False
+    assert result["execution_request"] is None
     assert "按您的指示" not in result["data"]["analysis"]
-    assert params["new_price"] > 0
 
 
 def test_directive_percent_up():
@@ -210,3 +221,30 @@ def test_competitor_mention_not_a_directive():
     """'竞品降价了 4%' 是市场描述不是指令, 不触发明示执行"""
     from app.skills.pricing_skill import _parse_directive
     assert _parse_directive("竞品降价了 4%，我们怎么办", 100.0) is None
+
+
+def test_parse_context_uses_real_db_data_for_sku():
+    """P8: 指定 SKU 时, 现价/库存必须取库内真实数据, 不得回退配置默认值"""
+    ctx = parse_context("把 SKU001 降到 80 元")
+    assert ctx["inventory"] == 50.0      # conftest 测试数据: SKU001 inventory=50
+    assert ctx["current_price"] == 99.0  # conftest 测试数据: SKU001 avg_price=99.0
+    assert ctx["_sku_in_db"] is True
+    assert ctx["_sources"]["inventory"] == "库内真实数据"
+    assert ctx["_sources"]["current_price"] == "库内真实数据"
+    assert ctx["_sources"]["competitor_price"] == "示例基准"  # 库内无竞品数据
+
+
+def test_render_labels_data_sources():
+    """P8: 【上下文】行逐项标注来源 —— 真实数据照实展示, 默认值标注'示例基准'"""
+    result = pricing_skill("把 SKU001 降到 80 元")
+    text = result["data"]["analysis"]
+    assert "库存 50 件（库内真实数据）" in text
+    assert "示例基准，非真实数据" in text
+
+
+def test_unknown_sku_falls_back_to_sample_labels():
+    """库中不存在的 SKU 回退示例基准值, 且必须如实标注, 不冒充真实数据"""
+    ctx = parse_context("把 SKU_NOT_EXIST_XYZ 降到 80 元")
+    assert ctx["_sku_in_db"] is False
+    assert ctx["_sources"]["inventory"] == "示例基准"
+    assert ctx["_sources"]["current_price"] != "库内真实数据"

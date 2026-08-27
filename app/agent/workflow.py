@@ -243,11 +243,6 @@ def _run_ads_skill(user_input, file_path, file_content, tool_result):
     return ads_skill(user_input)
 
 
-def _run_content_skill(user_input, file_path, file_content, tool_result):
-    from app.skills.content_skill import content_skill
-    return content_skill(user_input)
-
-
 def _run_help_skill(user_input, file_path, file_content, tool_result):
     from app.skills.help_skill import help_skill
     return help_skill(user_input)
@@ -314,7 +309,6 @@ EXECUTABLE_SKILLS = {"pricing_skill"}
 SKILL_REGISTRY = {
     "product_skill": _run_product_skill,
     "ads_skill": _run_ads_skill,
-    "content_skill": _run_content_skill,
     "help_skill": _run_help_skill,
     "file_analysis_skill": _run_file_analysis_skill,
     "inventory_skill": _run_inventory_skill,
@@ -488,12 +482,15 @@ def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_
                 )
                 return {"type": "error", "data": "技能 %s 执行出错, 请稍后重试。" % skill_name}
         if isinstance(result, dict) and result.get("is_executable") and result.get("execution_request"):
-            # R2: plan-execute 模式下步骤输入被规划器改写, 咨询信号 ("要不要跟进降价?")
-            # 在技能内部可能丢失; 用原始 user_input 复查 —— 咨询问句只看分析, 不进审批闭环
-            from app.skills.pricing_skill import is_consultative
-            if is_consultative(state.get("user_input", "")):
+            # R2: plan-execute 模式下步骤输入被规划器改写, 意图信号在技能内部可能丢失;
+            # 用原始 user_input 复查"是否存在明示调价指令"(目标价/涨跌幅/折扣)。
+            # 咨询问价("卖多少钱合适/定价建议")与调价执行("降价20%")是两个危险程度
+            # 完全不同的动作: 无明示指令一律不进入审批/执行闭环, 只输出建议。
+            from app.skills.pricing_skill import has_explicit_directive
+            # 以技能实际收到的输入为准复查(顺序模式下即原始用户消息)
+            if not has_explicit_directive(user_input or state.get("user_input", "")):
                 logger.info(
-                    "[skill_executor] consultative query, %s downgraded to analysis-only"
+                    "[skill_executor] no explicit pricing directive, %s downgraded to analysis-only"
                     % skill_name
                 )
                 return {
@@ -960,8 +957,13 @@ def _extract_text_from_result(result_obj):
             data.get("analysis")
             or data.get("copy")
             or data.get("response")
+            # report_skill 的文本在 summary 字段, 缺失此项会退化为 dict repr 原样输出
+            or data.get("summary")
             or str(data)
         )
+        # 报告文件生成成功时附上路径, 方便用户取阅
+        if data.get("summary") and data.get("report_file"):
+            text = "%s\n\n📄 报告文件：%s" % (data["summary"], data["report_file"])
     elif isinstance(data, str):
         text = data
     else:

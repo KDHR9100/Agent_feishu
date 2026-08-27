@@ -78,7 +78,8 @@ def _build_greeting_card() -> str:
                         "\u2022 商品销售分析 \u2014 \u201c分析商品销量\u201d\n"
                         "\u2022 广告效果分析 \u2014 \u201c4月广告数据如何\u201d\n"
                         "\u2022 库存预警查询 \u2014 \u201c库存预警\u201d\n"
-                        "\u2022 深度数据分析 \u2014 \u201c5月有什么数据\u201d"
+                        "\u2022 深度数据分析 \u2014 \u201c5月有什么数据\u201d\n"
+                        "\u2022 知识库检索 \u2014 \u201c佣金规则是什么/平台政策怎么规定\u201d"
                     ),
                 },
             },
@@ -89,6 +90,9 @@ def _build_greeting_card() -> str:
                     "content": (
                         "\U0001f4b0 **经营决策类**\n"
                         "\u2022 定价优化 \u2014 \u201c这个SKU卖多少钱合适\u201d（蒙特卡洛模拟）\n"
+                        "\u2022 调价执行 \u2014 \u201c把这个SKU降价20%\u201d\n"
+                        "\u2022 🔒 安全承诺：问价只给建议；真要调价会先弹审批卡片，"
+                        "**你点确认后才会执行**，随时可拒绝。"
                     ),
                 },
             },
@@ -98,7 +102,6 @@ def _build_greeting_card() -> str:
                     "tag": "lark_md",
                     "content": (
                         "\u270d\ufe0f **内容生成类**\n"
-                        "\u2022 营销文案撰写 \u2014 \u201c写一段种草文案\u201d\n"
                         "\u2022 Listing 生成 \u2014 \u201c帮我重新生成这个商品的listing\u201d\n"
                         "（商品图片 \u2192 多语言合规标题/五点描述/商品描述）"
                     ),
@@ -503,12 +506,9 @@ def _handle_single_message(msg):
                 # 流式执行: 分阶段推送进度消息
                 # 技能名中文映射（运营人员可读）
                 _SKILL_CN = {
-                    "inventory_skill": "库存管理",
-                    "ads_skill": "广告分析",
+                    "inventory_skill": "库存管理", "ads_skill": "广告分析",
                     "product_skill": "商品管理",
-                    "content_skill": "内容创作",
-                    "seo_skill": "SEO优化",
-                    "competitor_skill": "竞品分析",
+                    "seo_skill": "SEO优化", "competitor_skill": "竞品分析",
                     "trend_skill": "趋势分析",
                     "report_skill": "报告生成",
                     "support_skill": "客服助手",

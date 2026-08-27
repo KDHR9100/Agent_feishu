@@ -58,22 +58,15 @@ def test_sentinel_baseline_drift_lifecycle():
     assert sentinel.check_once() == []
 
 
-# ---------- pricing_skill 自定义上下文 -> 拒绝 -> 价格不变 ----------
+# ---------- pricing_skill 纯上下文信息(无指令) -> 不触发改价 -> 价格不变 ----------
 def test_pricing_skill_custom_context_rejected():
     verifier = av_mod.get_action_verifier()
     verifier.store._prices["default_hot_item"] = 120.0
     result = pricing_skill("当前售价 120，竞品均价 110，库存量 400，广告预算 1000")
-    req = result["execution_request"]
-    assert req["params"]["old_price"] == 120.0
-    assert req["params"]["new_price"] != 120.0  # 沙盒给出了不同于现状的最优解
-
-    from app.utils.approval import approval_manager
-    verify = av_mod.get_action_verifier().verify_and_execute(
-        req, conversation_id="conv-r2-price", skill_name="pricing_skill")
-    aid = verify["data"]["approval_id"]
-    approval_manager.resolve(aid, False)
-    assert approval_manager.take_and_execute(aid) is None
-    assert verifier.store.get_price("default_hot_item") == 120.0  # 拒绝后保持原价
+    # 只给了上下文、没有明示调价指令: 只出建议, 不产生执行请求(问价≠调价)
+    assert result["is_executable"] is False
+    assert result["execution_request"] is None
+    assert verifier.store.get_price("default_hot_item") == 120.0  # 价格保持不变
 
 
 # ---------- HTTP 端点组合: sentinel/check -> 执行回执查询链路 ----------

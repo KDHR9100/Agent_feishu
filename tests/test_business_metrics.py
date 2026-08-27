@@ -29,7 +29,7 @@ class TestBusinessMetricsRecord:
     def test_record_and_summary_counts(self, metrics):
         metrics.record_task("user_a", "product_skill", success=True, duration_seconds=3.0)
         metrics.record_task("user_a", "ads_skill", success=True, duration_seconds=5.0)
-        metrics.record_task("user_b", "content_skill", success=False, duration_seconds=2.0)
+        metrics.record_task("user_b", "seo_skill", success=False, duration_seconds=2.0)
 
         s = metrics.get_summary(days=7)
         assert s["total_tasks"] == 3

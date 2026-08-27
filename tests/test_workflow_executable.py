@@ -58,9 +58,24 @@ def test_executable_flow_reject_keeps_price(capsys):
     verifier.store._prices["default_hot_item"] = 99.0
     state = {"conversation_id": "conv-reject"}
     result = _execute_single_skill(
-        "pricing_skill", "帮我定价，当前售价 99，竞品均价 105", None, None, {}, state)
+        "pricing_skill", "帮我把爆款价格降到 79.2 元（当前售价 99，竞品均价 105）",
+        None, None, {}, state)
     assert result["type"] == "approval_required"
     aid = result["data"]["approval_id"]
     approval_manager.resolve(aid, False)
     assert approval_manager.take_and_execute(aid) is None
+    assert verifier.store.get_price("default_hot_item") == 99.0
+
+
+def test_consultative_pricing_never_creates_approval():
+    """问价咨询(卖多少合适)与调价执行是两回事: 咨询绝不产生审批单"""
+    verifier = av_mod.get_action_verifier()
+    verifier.store._prices["default_hot_item"] = 99.0
+    state = {"conversation_id": "conv-consult"}
+    result = _execute_single_skill(
+        "pricing_skill", "帮我定价，当前售价 99，竞品均价 105", None, None, {}, state)
+    # 咨询问句 → 纯分析, 不进审批链路
+    assert result["type"] == "analysis"
+    assert result.get("is_executable") is False
+    assert "approval_id" not in result.get("data", {})
     assert verifier.store.get_price("default_hot_item") == 99.0

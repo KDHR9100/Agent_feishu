@@ -115,16 +115,16 @@ def test_mock_store_concurrent_price_updates_no_crash():
         assert store.get_price("item_%d" % n) == pytest.approx(109.0)
 
 
-# ---------- 回归: 12 老技能注册机制未被破坏 ----------
+# ---------- 回归: 老技能注册机制未被破坏 ----------
 LEGACY_SKILLS = [
-    "product_skill", "ads_skill", "content_skill", "help_skill",
+    "product_skill", "ads_skill", "help_skill",
     "file_analysis_skill", "inventory_skill", "competitor_skill",
     "report_skill", "rag_skill", "seo_skill", "support_skill",
     "data_analysis_skill",
 ]
 
 
-def test_legacy_12_skills_registry_intact():
+def test_legacy_skills_registry_intact():
     for s in LEGACY_SKILLS:
         assert s in SKILL_REGISTRY and callable(SKILL_REGISTRY[s])
     assert "pricing_skill" in SKILL_REGISTRY  # 新增技能并列挂载
