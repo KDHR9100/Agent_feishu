@@ -92,6 +92,21 @@ def _get_db_data(user_input: str) -> Dict[str, Any]:
                 platforms.sort(key=lambda x: x["spend"], reverse=True)
                 data_parts.append(f"平台维度数据（{time_desc}）：\n{platforms}")
 
+        # 兜底: 用户未提及具体领域(如"5月有什么数据"), 把该时段全部数据取出来做整体概览
+        if not data_parts:
+            all_products = db_tool.read_data("product_sales.csv")
+            products = _filter_by_date(all_products, start_date, end_date)
+            if products:
+                data_parts.append(
+                    f"商品销售数据（{time_desc}，共{len(products)}条，前10条）：\n{products[:10]}"
+                )
+            all_ads = db_tool.read_data("ads_performance.csv")
+            ads = _filter_by_date(all_ads, start_date, end_date)
+            if ads:
+                data_parts.append(
+                    f"广告投放数据（{time_desc}，共{len(ads)}条，前10条）：\n{ads[:10]}"
+                )
+
         if data_parts:
             return {"source": "database", "data": "\n\n".join(data_parts), "time_desc": time_desc}
 

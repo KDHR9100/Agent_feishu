@@ -5,7 +5,8 @@ CrossLister 是独立运行的 FastAPI 微服务(默认端口 8080), 提供基�
 
 本客户端通过 HTTP 调用该服务, 不共享进程:
 - 服务地址: 环境变量 CROSSLISTER_URL, 默认 http://localhost:8080
-- 超时 60s (listing 生成涉及多步 LLM 调用)
+- 超时默认 180s (listing 生成涉及多步模型调用, 实测约 50-60s),
+  可通过环境变量 CROSSLISTER_TIMEOUT 调整
 - 所有网络/解析错误均捕获为 error dict, 不向上抛异常
 """
 import logging
@@ -17,7 +18,8 @@ import httpx
 logger = logging.getLogger("crosslister_client")
 
 # listing 生成涉及视觉分析 + 多步 LLM 调用, 需要较长超时
-_REQUEST_TIMEOUT = 60.0
+# (真实 API 模式实测约 50-60s, 多图片/慢模型时可能更久)
+_REQUEST_TIMEOUT = float(os.environ.get("CROSSLISTER_TIMEOUT", "180"))
 # 健康检查是轻量请求, 用短超时快速失败
 _HEALTH_TIMEOUT = 10.0
 

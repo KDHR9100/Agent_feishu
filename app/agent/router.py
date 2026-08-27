@@ -39,10 +39,30 @@ def _build_tools():
     return tool_list
 
 
+def _build_skill_list_section() -> str:
+    """从 manifest 动态生成路由 prompt 的技能清单段落。
+
+    与 _build_tools 同源: prompt 里描述的技能与 bind_tools 注入的工具
+    永远一致, manifest 增删技能后无需手改 prompt。
+    """
+    lines = []
+    for i, s in enumerate(skill_registry.list_tools(), 1):
+        lines.append("%d. %s：%s" % (i, s["name"], s["description"]))
+    return (
+        "## 技能清单（系统自动同步，与你可调用的工具完全一致）\n"
+        + "\n".join(lines)
+    )
+
+
 # 关键词快速路径开关: 高置信唯一命中时跳过 LLM, 路由耗时≈0ms
-KEYWORD_FAST_PATH = os.getenv("ROUTER_KEYWORD_FAST_PATH", "true").lower() == "true"
+# 默认关闭: 意图识别以路由 LLM 为主, 关键词仅在 LLM 失败时兜底;
+# 需要极致响应速度时可设 ROUTER_KEYWORD_FAST_PATH=true 重新启用
+KEYWORD_FAST_PATH = os.getenv("ROUTER_KEYWORD_FAST_PATH", "false").lower() == "true"
 # 快速路径触发阈值: 与交叉验证的 conf>=2 保持一致的置信度语义
 KEYWORD_FAST_PATH_MIN_CONF = int(os.getenv("ROUTER_KEYWORD_FAST_PATH_MIN_CONF", "2"))
+# 关键词覆盖/补充 LLM 结果开关: 默认关闭, 路由结果完全由路由 LLM 决定;
+# 关键词仅在 LLM 调用失败/超时时作为兜底(见 route() 尾部)
+KEYWORD_OVERRIDE_LLM = os.getenv("ROUTER_KEYWORD_OVERRIDE", "false").lower() == "true"
 
 # 路由结果缓存: temperature=0 下路由结果确定, 相同输入+相同会话上下文直接复用,
 # 免去飞书 webhook 重复推送/用户重发同一问题时的 LLM 调用
@@ -93,6 +113,7 @@ _cache = {
     "version": -1,          # 与 registry.version 对比, 不一致则重建
     "tools": None,          # StructuredTool 列表
     "llm_with_tools": None,  # bind_tools 后的 LLM
+    "skill_section": "",    # 路由 prompt 的动态技能清单段落
 }
 
 
@@ -103,6 +124,7 @@ def _ensure_tools_fresh():
     ver = skill_registry.version
     if _cache["version"] != ver:
         _cache["tools"] = _build_tools()
+        _cache["skill_section"] = _build_skill_list_section()
         KEYWORD_RULES = skill_registry.get_keyword_rules()
         _cache["llm_with_tools"] = None  # 使 bind_tools 缓存失效
         _cache["version"] = ver
@@ -233,7 +255,9 @@ def router(state):
                 history_lines.append(f"助手: {content}")
         history_text = "\n".join(history_lines)
 
-    enhanced_prompt = ROUTER_PROMPT
+    # 技能清单段落由 manifest 动态生成注入, 与 bind_tools 的工具列表同源,
+    # 保证 prompt 描述与实际可调用工具永远一致 (无需手工维护两份清单)
+    enhanced_prompt = ROUTER_PROMPT + "\n\n" + _cache["skill_section"]
     if history_text:
         enhanced_prompt += "\n\n## 历史对话上下文\n" + history_text
 
@@ -308,7 +332,8 @@ def router(state):
         first_params = response.tool_calls[0]["args"]
 
         # Cross-validation: LLM vs keyword scores
-        kw_scores = _keyword_scores(user_input)
+        # 默认关闭(意图识别以路由 LLM 为准), 需设 ROUTER_KEYWORD_OVERRIDE=true 才启用
+        kw_scores = _keyword_scores(user_input) if KEYWORD_OVERRIDE_LLM else {}
         llm_top = selected_skills[0]
         if kw_scores:
             kw_top = max(kw_scores, key=kw_scores.get)
