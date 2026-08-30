@@ -28,6 +28,14 @@ PRICE_REQ = {
     "description": "调高爆款价格测试",
 }
 
+# delist_product 仍走 store adapter (Mock) 执行并登记回滚窗口,
+# 用于验证回滚机制本身; update_price 已重定位为决策登记语义
+DELIST_REQ = {
+    "action": "delist_product",
+    "params": {"product_id": "default_hot_item"},
+    "description": "下架商品测试",
+}
+
 
 # ---------- platform_adapter ----------
 def test_mock_store_update_price(env):
@@ -71,20 +79,19 @@ def test_high_risk_requires_approval_before_execution(env, capsys):
     # 审批前: 价格绝未被修改
     assert store.get_price("default_hot_item") == 99.0
 
-    # 模拟飞书卡片点击批准: resolve -> take_and_execute (后台执行)
+    # 模拟飞书卡片点击批准: resolve -> take_and_execute (后台登记决策)
     assert approvals.resolve(aid, True) is True
     receipt = approvals.take_and_execute(aid)
     assert receipt["success"] is True
-    assert store.get_price("default_hot_item") == 120.0
+    # 决策登记语义: 店铺数据不动, 产出登记回执 + 手动执行引导
+    assert store.get_price("default_hot_item") == 99.0
+    assert receipt["post_status"] == "registered"
+    assert "调价决策已登记" in receipt["message"]
+    assert "商家后台" in receipt["manual_guide"]
+    assert receipt.get("action_id") is None  # 无回滚窗口
 
     out = capsys.readouterr().out
-    assert "模拟修改价格成功" in out
-    assert "Mock 执行成功" in out
-
-    # 执行后回执: 回滚窗口已登记旧值
-    rec = rollback.get(receipt["action_id"])
-    assert rec["status"] == "awaiting_confirmation"
-    assert rec["old_values"]["old_price"] == 99.0
+    assert "调价决策已登记" in out
 
 
 def test_approval_timeout_abandons_execution(env):
@@ -130,13 +137,13 @@ def test_auto_rollback_when_not_confirmed(env):
     approvals = ApprovalManager()
     rb = RollbackManager(store_api=store, confirm_window_seconds=0.05, auto_start=False)
     verifier = ActionVerifier(store_api=store, rollback_manager=rb, approvals=approvals)
-    receipt = _approve_and_execute(verifier, approvals, PRICE_REQ)
-    assert store.get_price("default_hot_item") == 120.0
+    receipt = _approve_and_execute(verifier, approvals, DELIST_REQ)
+    assert store._status["default_hot_item"] == "delisted"
 
     time.sleep(0.08)  # 超过确认窗口
     rolled = rb.sweep_once()
     assert receipt["action_id"] in rolled
-    assert store.get_price("default_hot_item") == 99.0  # 自动调回原价
+    assert store._status["default_hot_item"] == "on_sale"  # 自动重新上架
 
 
 def test_confirm_prevents_rollback(env):
@@ -144,12 +151,12 @@ def test_confirm_prevents_rollback(env):
     approvals = ApprovalManager()
     rb = RollbackManager(store_api=store, confirm_window_seconds=0.05, auto_start=False)
     verifier = ActionVerifier(store_api=store, rollback_manager=rb, approvals=approvals)
-    receipt = _approve_and_execute(verifier, approvals, PRICE_REQ)
+    receipt = _approve_and_execute(verifier, approvals, DELIST_REQ)
 
     assert rb.confirm(receipt["action_id"]) is True
     time.sleep(0.08)
     assert rb.sweep_once() == []
-    assert store.get_price("default_hot_item") == 120.0  # 人工确认后保持新价
+    assert store._status["default_hot_item"] == "delisted"  # 人工确认后保持下架
 
 
 def test_coupons_not_auto_rollbackable(env):
@@ -168,8 +175,8 @@ def test_coupons_not_auto_rollbackable(env):
 
 def test_double_rollback_safe(env):
     store, rollback, approvals, verifier = env
-    receipt = _approve_and_execute(verifier, approvals, PRICE_REQ)
+    receipt = _approve_and_execute(verifier, approvals, DELIST_REQ)
     action_id = receipt["action_id"]
     assert rollback.rollback(action_id)["success"] is True
     assert rollback.rollback(action_id)["success"] is False  # 幂等保护
-    assert store.get_price("default_hot_item") == 99.0
+    assert store._status["default_hot_item"] == "on_sale"

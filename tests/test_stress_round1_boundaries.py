@@ -116,7 +116,8 @@ def test_unsupported_action_marked_failed():
 
 def test_confirmed_action_cannot_rollback():
     store, rb, ap, verifier = _mk_verifier()
-    receipt = verifier._execute("update_price", {"product_id": "default_hot_item", "new_price": 88})
+    # delist_product 仍走 Mock 执行 + 回滚登记 (update_price 已是决策登记语义)
+    receipt = verifier._execute("delist_product", {"product_id": "default_hot_item"})
     assert receipt["success"] is True
     assert rb.confirm(receipt["action_id"]) is True
     res = rb.rollback(receipt["action_id"])

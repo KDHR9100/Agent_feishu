@@ -6,7 +6,8 @@
 2. 生成 5 个候选方案 (价格 x 广告预算组合; 生产环境由 LLM 生成, 此处为确定性模板保证可复现)
 3. solver_engine 对每个候选跑 1000 次蒙特卡洛模拟, 选出期望净利润最高者
 4. 输出 "建议降价 X%, ROI 提升 Y%" 并附 95% 模拟置信区间
-5. 携带 is_executable=True 与 execution_request, 交由 executor 审批闭环执行 (绝不直接改价)
+5. 携带 is_executable=True 与 execution_request, 交由 executor 审批闭环:
+   批准后登记调价决策(不直接改价), 实际改价由运营在平台商家后台手动完成
 """
 import logging
 import re
@@ -140,7 +141,7 @@ TARGET_PRICE_KEYWORDS = [
     "降价到", "涨价到", "提价到",
     "再降到", "降到", "调低到", "降低到", "降至", "调低至", "低到",
     "再涨到", "涨到", "调高到", "提高到", "升至", "高到",
-    "调整到", "调价到", "调价为", "调到", "调至",
+    "调整到", "调价到", "调价为", "调到", "调至", "改到",
     "改价到", "改价为", "改成", "改为", "设为",
 ]
 
@@ -448,7 +449,9 @@ def _render_text(opt, target_price=None, target_plan=None):
         % (best["loss_probability"] * 100.0, best["std_profit"]),
         "【ROI】当前 %.2f → 优化后 %.2f" % (opt["current_roi"], opt["best_roi"]),
         "",
-        "✅ 该方案已通过沙盒验证。如需执行调价，将进入人工审批流程（Agent 不会自动改价）。",
+        "✅ 该方案已通过沙盒验证。如需执行调价，请下达明确指令（如“降价 20%”）；"
+        "经人工审批确认后登记调价决策，实际改价请在电商平台商家后台手动完成"
+        "（Agent 不直接操作平台）。",
     ]
     return "\n".join(lines)
 
@@ -555,7 +558,8 @@ def pricing_skill(user_input, file_path=None, file_content=None, tool_result=Non
                 "new_price": exec_price,
                 "new_ad_budget": cand["ad_budget"],
             },
-            "description": "将商品 %s 由 %.2f 元调整为 %.2f 元（%s %.1f%%）"
+            "description": "将商品 %s 由 %.2f 元调整为 %.2f 元（%s %.1f%%）；"
+            "批准后登记调价决策，实际改价请在商家后台手动完成"
             % (product_id, ctx["current_price"], exec_price,
                "降价" if exec_change_pct < 0 else "涨价", abs(exec_change_pct)),
         },

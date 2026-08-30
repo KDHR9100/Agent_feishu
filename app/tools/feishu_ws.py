@@ -166,14 +166,14 @@ def _build_approval_card(info: dict) -> str:
                     "content": "**关联技能**：%s\n**审批单号**：%s" % (skill, approval_id),
                 },
             },
-            {"tag": "note", "elements": [{"tag": "plain_text", "content": "点击按钮后 Agent 才会执行/放弃该操作"}]},
+            {"tag": "note", "elements": [{"tag": "plain_text", "content": "点击按钮后 Agent 才会处理/放弃该操作"}]},
             {"tag": "hr"},
             {
                 "tag": "action",
                 "actions": [
                     {
                         "tag": "button",
-                        "text": {"tag": "plain_text", "content": "\u2705 批准并执行"},
+                        "text": {"tag": "plain_text", "content": "\u2705 批准"},
                         "type": "danger",
                         "value": {"approval_id": approval_id, "action": "approve"},
                     },
@@ -192,7 +192,7 @@ def _build_approval_card(info: dict) -> str:
 
 def _build_approval_resolved_card(approval_id, skill, desc, approved):
     """构建审批结果卡片 (回调响应中用于更新原卡片, 1.0 JSON)"""
-    status = "\u2705 已批准，操作已执行" if approved else "\u274c 已拒绝，操作未执行"
+    status = "\u2705 已批准，操作已处理" if approved else "\u274c 已拒绝，操作未执行"
     return {
         "config": {"wide_screen_mode": True, "update_multi": True},
         "header": {
@@ -722,7 +722,7 @@ def do_p2_card_action_trigger(data):
             threading.Thread(
                 target=_run_approved_async, args=(approval_id,), daemon=True
             ).start()
-            toast = {"type": "success", "content": "已批准，正在执行操作..."}
+            toast = {"type": "success", "content": "已批准，正在处理操作..."}
             card_data = _build_approval_resolved_card(approval_id, skill, desc, True)
         elif act == "reject":
             approval_manager.resolve(approval_id, False)

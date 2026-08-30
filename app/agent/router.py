@@ -64,6 +64,39 @@ KEYWORD_FAST_PATH_MIN_CONF = int(os.getenv("ROUTER_KEYWORD_FAST_PATH_MIN_CONF", 
 # 关键词仅在 LLM 调用失败/超时时作为兜底(见 route() 尾部)
 KEYWORD_OVERRIDE_LLM = os.getenv("ROUTER_KEYWORD_OVERRIDE", "false").lower() == "true"
 
+# 定价指令确定性快路径: 高危指令(改价/降涨折扣)的路由不依赖 LLM 能力。
+# 动机(T34b): 路由模型较弱时 "SKU-A001改价到99" 曾被路由到 product_skill
+# 输出无关报告, 调价审批门被整条绕过 —— 安全关键路径不能押注在模型能力上。
+# 判别复用 pricing_skill.has_explicit_directive 的结构化指令解析
+# (目标价/涨跌幅/折扣, 内置咨询句式与竞品语境剔除), 而非裸关键词包含:
+# "竞品把价格杀到99了"/"要不要降价" 这类仅含价格词的歧义输入不会触发快路。
+PRICING_DIRECTIVE_FAST_PATH = (
+    os.getenv("ROUTER_PRICING_DIRECTIVE_FAST_PATH", "true").lower() == "true"
+)
+# 写作语境词: 命中说明"降价/打折"只是创作素材而非执行指令, 不走快路
+_PRICING_WRITING_CONTEXT_WORDS = (
+    "文案", "标题", "描述", "广告语", "话术", "写一段", "帮写", "撰写",
+)
+
+
+def _pricing_directive_hits(user_input: str, kw_scores: dict) -> bool:
+    """定价明示指令的确定性路由判别, 命中返回 True
+
+    多意图守卫: 其余技能关键词 conf>=2 视为复合指令(如"查库存再降价"),
+    交回 LLM/规划器编排, 避免快路吞掉其余步骤。
+    """
+    if not PRICING_DIRECTIVE_FAST_PATH:
+        return False
+    if any(w in user_input for w in _PRICING_WRITING_CONTEXT_WORDS):
+        return False
+    if any(conf >= 2 for skill, conf in kw_scores.items() if skill != "pricing_skill"):
+        return False
+    try:
+        from app.skills.pricing_skill import has_explicit_directive
+        return has_explicit_directive(user_input)
+    except Exception:
+        return False
+
 # 路由结果缓存: temperature=0 下路由结果确定, 相同输入+相同会话上下文直接复用,
 # 免去飞书 webhook 重复推送/用户重发同一问题时的 LLM 调用
 ROUTER_CACHE_ENABLED = os.getenv("ROUTER_CACHE_ENABLED", "true").lower() == "true"
@@ -240,6 +273,17 @@ def router(state):
             state["skills_to_execute"] = ["file_analysis_skill"]
             state["intent"] = "file_analysis_skill"
             logger.info("[router] file shortcut -> file_analysis_skill")
+            return state
+
+    # ── 定价指令快路径: 高危指令路由不依赖 LLM 能力 (T34b) ──
+    # 反思重试轮(带 reflect_feedback)不走快路, 交给 LLM 结合反馈重新判断
+    if not state.get("reflect_feedback"):
+        kw_scores_pre = _keyword_scores(user_input)
+        if _pricing_directive_hits(user_input, kw_scores_pre):
+            state["tool_result"] = {"skill": "pricing_skill", "user_input": user_input}
+            state["skills_to_execute"] = ["pricing_skill"]
+            state["intent"] = "pricing_skill"
+            logger.info("[router] pricing directive fast path -> pricing_skill")
             return state
 
     history_text = ""

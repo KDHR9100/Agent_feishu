@@ -2,13 +2,17 @@
 """L4 动作校验器: 高风险动作执行前强制飞书卡片审批
 
 链路: verify_and_execute(execution_request)
-  - 高风险动作(update_price/batch_send_coupons/delist_product):
-      复用 ApprovalManager 创建审批 -> feishu_ws 发审批卡片
-      -> 人工点击批准 -> take_and_execute 回调执行 -> 写执行后回执 -> 登记回滚窗口
-      -> 5 分钟(APPROVAL_TIMEOUT=300s)无人审批则默认放弃并记录日志
+  - update_price (调价): 审批卡片 -> 人工点击批准 -> 登记调价决策 + 推送
+    手动执行引导。定位边界: 多数电商开放平台不覆盖网页端改价, 且此前 Mock
+    适配器"改内存价格"会制造"已改价"的虚假闭环 —— 实际改价由运营在平台
+    商家后台手动完成, Agent 负责 模拟验证 + 人工审批 + 决策登记 + 执行引导。
+  - 其余高风险动作(batch_send_coupons/delist_product):
+      审批卡片 -> 人工批准 -> 经 store adapter 执行 (默认 Mock) -> 登记回滚窗口
   - 其余动作: 直接经 store adapter 执行 (默认 Mock)
 """
 import logging
+import time
+import uuid
 
 from app.utils.action_log import log_action
 
@@ -85,19 +89,35 @@ class ActionVerifier:
         }
 
     # ---------- 执行 ----------
+    def _register_price_change_decision(self, params):
+        """调价决策登记: 不触碰店铺数据, 产出决策回执 + 手动执行引导
+
+        审批卡片上的价格对审批人展示的是 params 里的 old/new_price,
+        登记口径必须与之一致(取 params 优先, store 现价仅作缺失兜底)。
+        """
+        pid = params.get("product_id")
+        new_price = float(params.get("new_price") or 0)
+        if new_price <= 0:
+            # 非法价格在登记层显式拒绝(旧链路由 store adapter 拦截, 重定位后职责前移)
+            return {"success": False, "message": "非法价格: %s" % params.get("new_price")}
+        old_price = float(params.get("old_price") or self.store.get_price(pid) or 0)
+        return {
+            "success": True,
+            "receipt_id": "decision-%s" % uuid.uuid4().hex[:8],
+            "message": "调价决策已登记: %s %.2f -> %.2f 元" % (pid, old_price, new_price),
+            "product_id": pid,
+            "old_price": old_price,
+            "new_price": new_price,
+            "platform": "manual",
+            "executed_at": time.time(),
+            "manual_guide": "请在电商平台商家后台手动完成改价；"
+                            "改价完成后告诉我，可以基于新价格复测损益影响。",
+        }
+
     def _execute(self, action, params, conversation_id=""):
         receipt = {"success": False, "message": "unsupported action"}
         if action == "update_price":
-            pid = params.get("product_id")
-            old_price = self.store.get_price(pid)
-            receipt = self.store.update_price(pid, params.get("new_price"))
-            if receipt.get("success"):
-                aid = self.rollback.record(
-                    action, params, {"old_price": old_price},
-                    conversation_id=conversation_id)
-                receipt["action_id"] = aid
-                receipt["rollback_note"] = (
-                    "1 小时内未收到人工确认将自动回滚至 %.2f 元" % old_price)
+            receipt = self._register_price_change_decision(params)
         elif action == "batch_send_coupons":
             receipt = self.store.batch_send_coupons(params)
             if receipt.get("success"):
@@ -117,12 +137,22 @@ class ActionVerifier:
             logger.warning("[verifier] unsupported action=%s", action)
 
         receipt["action"] = action
-        receipt["post_status"] = (
-            "awaiting_confirmation" if receipt.get("success") else "failed")
+        if action == "update_price":
+            # 决策登记语义: 无回滚窗口, 最终状态以商家后台实际改价为准
+            receipt["post_status"] = (
+                "registered" if receipt.get("success") else "failed")
+        else:
+            receipt["post_status"] = (
+                "awaiting_confirmation" if receipt.get("success") else "failed")
         if receipt.get("success"):
-            mode = "Mock" if getattr(self.store, "platform", "") == "mock" else "真实平台"
-            print("[executor] %s 执行成功 | action=%s | receipt_id=%s"
-                  % (mode, action, receipt.get("receipt_id")))
+            if action == "update_price":
+                print("[executor] 调价决策已登记 | product=%s | %.2f -> %.2f | receipt_id=%s"
+                      % (params.get("product_id"), receipt.get("old_price", 0.0),
+                         receipt.get("new_price", 0.0), receipt.get("receipt_id")))
+            else:
+                mode = "Mock" if getattr(self.store, "platform", "") == "mock" else "真实平台"
+                print("[executor] %s 执行成功 | action=%s | receipt_id=%s"
+                      % (mode, action, receipt.get("receipt_id")))
         return receipt
 
     def _execute_after_approval(self, action, params, description,
@@ -145,12 +175,14 @@ class ActionVerifier:
         try:
             from app.tools.feishu_tool import feishu_tool
             lines = [
-                "✅ 执行回执：%s" % receipt.get("message", ""),
-                "动作 ID：%s" % receipt.get("action_id", "-"),
+                "✅ 审批处理回执：%s" % receipt.get("message", ""),
+                "动作 ID：%s" % (receipt.get("action_id") or receipt.get("receipt_id") or "-"),
             ]
             if receipt.get("rollback_note"):
                 lines.append("⚠️ %s" % receipt["rollback_note"])
-            lines.append("如确认无误，请在 1 小时内回复确认完成，否则将自动回滚。")
+                lines.append("如确认无误，请在 1 小时内回复确认完成，否则将自动回滚。")
+            if receipt.get("manual_guide"):
+                lines.append("📌 %s" % receipt["manual_guide"])
             feishu_tool.send_message(conversation_id, "\n".join(lines))
         except Exception as e:
             logger.warning("[verifier] push receipt to feishu failed: %s", e)
