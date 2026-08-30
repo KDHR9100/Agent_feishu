@@ -1,6 +1,6 @@
 # Ecommerce Agent
 
-基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库（时间衰减）、文件解析、多轮对话记忆（60 条热窗口 + SQLite 全量归档 + LLM 摘要持久化）、Guardrails 安全防护、MCP 动态技能热插拔、Plan-Execute 顺序规划、高危操作飞书审批（问价咨询与调价执行严格分离：调价必须点审批卡片确认后才执行）、回滚登记持久化（重启不丢安全保证）、多模态图片解析、全链路 Token 追踪等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
+基于 LangGraph + FastAPI 构建的电商运营智能 Agent 服务，集成飞书 WebSocket 消息接入、RAG 混合检索知识库（时间衰减）、文件解析、多轮对话记忆（60 条热窗口 + SQLite 全量归档 + LLM 摘要持久化）、Guardrails 安全防护、MCP 动态技能热插拔、Plan-Execute 顺序规划、高危操作飞书审批（问价咨询与调价执行严格分离：调价经"模拟验证 → 人工审批 → 决策登记 → 商家后台手动改价"链路，Agent 不直接操作平台）、回滚登记持久化（重启不丢安全保证）、多模态图片解析、全链路 Token 追踪等功能。用户通过飞书发送自然语言，Agent 自动识别意图、路由到对应技能、调用工具完成任务。
 
 ---
 
@@ -105,7 +105,7 @@ feishu_tool.reply_message() --- 回复用户
 | load_file | 若有文件路径，调用 file_parser_tool 解析文件 |
 | router | 意图识别 + 技能路由，输出 skills_to_execute 列表（支持多技能） |
 | planner | 多技能时生成顺序执行计划 execution_plan（Step JSON，禁止并行 fan-out）；单技能跳过 |
-| skill_executor | 按 execution_plan 顺序执行技能；定价区分问价咨询（只给建议）与调价执行（明示指令走审批门），高危指令非阻塞挂起 |
+| skill_executor | 按 execution_plan 顺序执行技能；定价区分问价咨询（只给建议）与调价指令（明示指令走审批门，批准后登记调价决策），高危指令非阻塞挂起 |
 | reflect | ReAct 反思：LLM 判断技能结果是否充分 |
 | answer | 单结果直接提取；多结果调用 LLM 综合生成连贯回答 |
 | save_history | 将用户输入和最终回答写入 LocalMemory |
@@ -126,17 +126,21 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 
 ## 3. 路由机制
 
-路由采用三层递进策略，确保高可用：
+路由采用四层递进策略，确保高可用：
 
 ### 第一层：文件快捷路由
 
 若 file_path 和 file_content 都存在，且用户输入为空/以 [文件] 开头/包含文件相关关键词（解析、分析、查看、解读等），直接路由到 file_analysis_skill，跳过 LLM 调用。
 
-### 第二层：LLM Tool-Calling
+### 第二层：定价指令确定性快路径
+
+明示调价指令（目标价/涨跌幅/折扣）经 `pricing_skill.has_explicit_directive` 结构化判别命中后，直接路由到 pricing_skill，跳过 LLM——**安全关键路径的路由不依赖 LLM 能力**（弱模型/降级模式下"SKU-A001改价到99"曾被误路由到商品分析技能，调价审批门被整条绕过）。判别基于指令结构解析而非裸关键词：竞品语境（"竞品把价格杀到99了"）、咨询句式（"要不要降价"）、创作素材（"写降价文案"）等歧义输入不触发；其余技能关键词 conf>=2 的复合指令交回 LLM/规划器。可通过 `ROUTER_PRICING_DIRECTIVE_FAST_PATH` 关闭。
+
+### 第三层：LLM Tool-Calling
 
 将 13 个技能封装为 StructuredTool，通过 llm.bind_tools(tools) 让 LLM 以 function calling 方式选择技能。支持多技能选择。超时 30 秒。
 
-### 第三层：交叉验证 + Keyword Fallback
+### 第四层：交叉验证 + Keyword Fallback
 
 - 交叉验证：LLM 选择后，用关键词评分验证。若关键词最高分技能与 LLM 不同且置信度 >= 2，则关键词结果优先。
 - Keyword Fallback：LLM 调用超时或异常时，使用 KEYWORD_RULES 进行关键词匹配。
@@ -168,7 +172,7 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 | 10 | file_analysis_skill | 文件解析分析报告 | 解析文件、分析文件、这个表格、这份数据 | 已解析 file_content + LLM 结构化报告 |
 | 11 | help_skill | 使用帮助、功能介绍 | 帮助、你能做什么、功能、怎么用 | HELP_PROMPT + LLM |
 | 12 | listing | Listing 生成：商品图片 → 多语言合规标题/五点描述/商品描述/后台关键词（含违禁词合规审核） | listing、标题、描述、商品详情、重新生成 | 多模态图片识别 + 平台规则 + 合规审核 |
-| 13 | pricing_skill | L4 智能定价（问价/调价分离）：问价咨询（"卖多少钱合适"）只输出蒙特卡洛沙盒测算建议，不改价；明示调价指令（目标价/涨跌幅/折扣）才生成执行请求走飞书审批，点卡片确认后才执行；批量调价直接拒绝 | 定价、活动价、调价、卖多少钱、降价 20% | profit_model + solver_engine 蒙特卡洛模拟 + 审批门 |
+| 13 | pricing_skill | L4 智能定价（问价/调价分离）：问价咨询（"卖多少钱合适"）与"我降到X行不行"均输出蒙特卡洛沙盒测算建议，不改价；明示调价指令（目标价/涨跌幅/折扣）经确定性快路径直达本技能，先跑沙盒验证再发审批卡片，点批准后**登记调价决策并引导在电商平台商家后台手动改价**（Agent 不直接操作平台）；批量调价直接拒绝 | 定价、活动价、调价、卖多少钱、降价 20%、改价到 99、打个八八折 | profit_model + solver_engine 蒙特卡洛模拟 + 审批门 + 决策登记 |
 
 库存预警阈值（按品类）：electronics: 50, clothing: 100, food: 100, beauty: 200, 默认: 100
 
@@ -333,7 +337,7 @@ LocalMemory 双层存储架构（归档式持久化）：
 - 进程管理：ws_manager 管理 WebSocket 子进程，最大重启 5 次，冷却 30 秒
 - 流式体验：收到消息立即回执"已收到，正在思考..."，路由/规划/执行各阶段推送"思考过程"进度消息
 - 多模态：图片消息下载后经 VLM 解析为结构化表格内容参与分析
-- 审批交互：高危操作发送交互卡片（批准/拒绝按钮），card.action.trigger 回调（WS 长连接事件帧）3 秒内响应，批准后后台线程执行技能并推送结果
+- 审批交互：高危操作发送交互卡片（批准/拒绝按钮），card.action.trigger 回调（WS 长连接事件帧）3 秒内响应，批准后后台线程处理并推送回执（调价动作登记决策并附商家后台手动执行引导，其余动作执行并推送结果）
 
 ---
 
@@ -668,7 +672,7 @@ docker compose down
 
 ## 16. 单元测试
 
-共 46 个测试文件、505 个用例（502 passed / 3 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪、定价（问价咨询/调价执行分离）/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
+共 47 个测试文件、520 个用例（517 passed / 3 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由（含定价指令确定性快路径）、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪（含未归属调用兜底记账）、定价（问价咨询/调价指令分离 + 决策登记）/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
 
 ### 共享 Fixture（conftest.py）
 
@@ -817,6 +821,7 @@ GitHub Actions（.github/workflows/ci.yml）：
 | 日志保留天数 | LOG_RETENTION_DAYS | 90 | token/业务任务日志保留期，每日 03:00 定时清理超期记录；<=0 关闭清理 |
 | 回滚登记持久化 | ROLLBACK_PERSISTENCE_ENABLED | true | L4 待确认动作登记落库（pending_actions 表），重启后恢复未确认动作；测试环境自动关闭 |
 | 关键词快速路径 | ROUTER_KEYWORD_FAST_PATH | true | 高置信关键词命中时跳过 LLM（conf>=2 唯一命中触发） |
+| 定价指令快路径 | ROUTER_PRICING_DIRECTIVE_FAST_PATH | true | 明示调价指令（目标价/涨跌幅/折扣）经结构化判别直接路由 pricing_skill，审批门不依赖 LLM 能力；竞品语境/咨询句式/创作素材等歧义输入不触发 |
 | LLM 请求超时 | LLM_REQUEST_TIMEOUT | 45 | 主 LLM 单次请求超时秒数 |
 | LLM 最大重试 | LLM_MAX_RETRIES | 1 | 主 LLM 请求失败重试次数 |
 
