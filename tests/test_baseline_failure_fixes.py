@@ -53,8 +53,39 @@ class TestZeroSpendROI:
 
         assert out["data"]["overall_roi"] is None
         assert "无意义" in out["data"]["raw_data"]["zero_spend_note"]
-        assert "零花费广告" in out["data"]["raw_data"]["zero_spend_note"]
+        assert "整体总花费为 0" in out["data"]["raw_data"]["zero_spend_note"]
         assert "无意义" in out["data"]["analysis"]
+
+    def test_ads_skill_mixed_spend_lists_zero_spend_ads(self):
+        """部分广告花费为 0: note 逐一点名, 不掩盖"""
+        from app.skills import ads_skill as mod
+
+        rows = [
+            {"ad_id": "AD001", "ad_name": "正常投放", "platform": "taobao",
+             "clicks": 100, "impressions": 1000, "spend": 50,
+             "conversions": 5, "conversion_value": 250, "date": "2026-08-29"},
+            {"ad_id": "AD002", "ad_name": "停投广告", "platform": "douyin",
+             "clicks": 0, "impressions": 0, "spend": 0,
+             "conversions": 0, "conversion_value": 0, "date": "2026-08-29"},
+        ]
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = RuntimeError("llm down")
+        with patch.object(mod.db_tool, "get_ads_performance", return_value=rows), \
+             patch.object(mod.db_tool, "get_ads_by_platform", return_value=[]), \
+             patch.object(mod.db_tool, "get_campaign_performance", return_value=[]), \
+             patch.object(mod, "get_llm", return_value=mock_llm):
+            out = mod.ads_skill("广告投放效果如何？")
+
+        note = out["data"]["raw_data"]["zero_spend_note"]
+        assert "停投广告" in note
+        assert "未投放" in note
+        # 正常广告的 ROI 保留真实值
+        normal = [a for a in out["data"]["raw_data"]["database_data"]
+                  if a.get("ad_id") == "AD001"][0]
+        assert normal["roas"] == 5.0
+        zero = [a for a in out["data"]["raw_data"]["database_data"]
+                if a.get("ad_id") == "AD002"][0]
+        assert zero["roas"] is None
 
 
 # ============================================================
@@ -302,3 +333,61 @@ class TestDeterministicApprovalAnswer:
 
         assert wf._deterministic_approval_answer(
             {"user_input": "今天天气怎么样", "conversation_id": "x"}) == ""
+
+
+class TestApprovalFollowupIntercept:
+    """追问拦截: 台账有记录时直接给状态答复, 不重跑技能(不产生重复审批单)"""
+
+    def test_intercept_returns_status_without_running_skill(self):
+        from app.agent import workflow as wf
+        import app.utils.approval as ap_mod
+
+        items = [{"status": "rejected", "executed": False,
+                  "description": "将商品 SKU-A002 降价 10%",
+                  "conversation_id": "c-int", "created_at": 0, "resolved_at": 1}]
+        with patch.object(ap_mod.approval_manager, "recent_approvals",
+                          return_value=items):
+            state = {
+                "user_input": "刚才那个降价怎么还没执行？",
+                "tool_result": {"user_input": "刚才那个降价怎么还没执行？"},
+                "conversation_id": "c-int",
+            }
+            out = wf.skill_executor(state)
+        assert out["tool_result"]["type"] == "chat"
+        assert "已被拒绝" in out["tool_result"]["data"]
+        # 未执行任何业务技能
+        assert out["skill_results"][0]["skill"] == "approval_status"
+
+    def test_new_directive_not_intercepted(self):
+        """复合输入含真实新指令时不拦截, 照常执行技能"""
+        from app.agent import workflow as wf
+        import app.utils.approval as ap_mod
+
+        with patch.object(ap_mod.approval_manager, "recent_approvals",
+                          return_value=[]):
+            state = {
+                # 含明示目标价 -> 有新指令, 不拦截
+                "tool_result": {"user_input": "把SKU-A002降价10%，顺便刚才那个单子怎么还没执行？"},
+                "conversation_id": "c-int2",
+                "token_usage": {},
+            }
+            out = wf.skill_executor(state)
+        # 不应有 approval_status 结果 (技能照常执行)
+        skills = [r.get("skill") for r in out.get("skill_results") or []]
+        assert "approval_status" not in skills
+
+    def test_no_records_falls_through(self):
+        """台账无记录时不拦截, 走原技能流程"""
+        from app.agent import workflow as wf
+        import app.utils.approval as ap_mod
+
+        with patch.object(ap_mod.approval_manager, "recent_approvals",
+                          return_value=[]):
+            state = {
+                "tool_result": {"user_input": "刚才那个降价怎么还没执行？"},
+                "conversation_id": "c-int3",
+                "token_usage": {},
+            }
+            out = wf.skill_executor(state)
+        skills = [r.get("skill") for r in out.get("skill_results") or []]
+        assert "approval_status" not in skills

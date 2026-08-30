@@ -707,6 +707,32 @@ def skill_executor(state):
     }
     results = []
 
+    # AP33b 修复: 审批进展追问优先走确定性状态答复, 不重跑技能 ——
+    # "刚才那个降价怎么还没执行？" 含高危词, 若照常执行会再次触发定价
+    # 指令、产生重复审批单。台账有记录时直接给状态答复 (零 LLM 消耗)。
+    _fu_input = tool_result.get("user_input", "")
+    if _fu_input and any(m in _fu_input for m in _APPROVAL_FOLLOWUP_MARKS):
+        try:
+            from app.skills.pricing_skill import has_explicit_directive as _has_new_directive
+            _is_new_directive = _has_new_directive(_fu_input)
+        except Exception:
+            _is_new_directive = False
+        if not _is_new_directive:
+            status_answer = _deterministic_approval_answer(state)
+            if status_answer:
+                logger.warning(
+                    "[skill_executor] approval follow-up intercepted, "
+                    "deterministic status answer | conversation_id=%s"
+                    % state.get("conversation_id", "?")
+                )
+                result = {"type": "chat", "data": status_answer,
+                          "skill": "approval_status"}
+                state["skill_results"] = [
+                    {"skill": "approval_status", "result": result}
+                ]
+                state["tool_result"] = result
+                return state
+
     # L4 任务12 旁路仲裁: 用户请求含超过 2 个相互冲突的指标时, 不直接执行技能,
     # 交由冲突仲裁器算帕累托前沿并出决策看板供用户点选 (最终权衡交给人类)。
     _raw_input = tool_result.get("user_input", "")
