@@ -11,7 +11,12 @@ from app.config import get_router_llm
 from app.prompts import ROUTER_PROMPT
 from app.utils.timeout import timeout, TimeoutException
 from app.mcp_server import skill_registry
-from app.utils.security import detect_injection, SAFE_BLOCK_RESPONSE, wrap_untrusted
+from app.utils.security import (
+    detect_injection,
+    detect_path_traversal,
+    SAFE_BLOCK_RESPONSE,
+    wrap_untrusted,
+)
 from app.utils.token_tracker import track_as
 
 logger = logging.getLogger("router")
@@ -228,6 +233,26 @@ def router(state):
         }
         state["skills_to_execute"] = ["unknown"]
         state["intent"] = "injection_blocked"
+        state["execution_plan"] = None
+        return state
+
+    # ── 路径穿越攻击拦截 (T28): 与注入同级的确定性第一道防线 ──
+    # "读取 ../../etc/passwd" 不是业务诉求, 在路由分发前以固定文案拦截,
+    # 不消耗 LLM, 也不落到 file_analysis_skill 的通用报错上
+    if detect_path_traversal(user_input):
+        from app.utils.security import SAFE_TRAVERSAL_RESPONSE
+        logger.warning(
+            "[router] PATH TRAVERSAL BLOCKED | conversation_id=%s | input_preview=%s"
+            % (state.get("conversation_id", "?"), user_input[:100])
+        )
+        state["tool_result"] = {
+            "skill": "unknown",
+            "user_input": user_input,
+            "data": SAFE_TRAVERSAL_RESPONSE,
+            "injection_blocked": True,
+        }
+        state["skills_to_execute"] = ["unknown"]
+        state["intent"] = "traversal_blocked"
         state["execution_plan"] = None
         return state
 

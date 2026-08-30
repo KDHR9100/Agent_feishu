@@ -23,22 +23,28 @@ def extract_ad_id_from_input(user_input: str) -> Optional[str]:
     return None
 
 
-def calculate_roi(spend: float, conversion_value: float) -> float:
+def calculate_roi(spend: float, conversion_value: float) -> Optional[float]:
+    """T21: spend=0 时 ROI 无意义(无投入分母), 返回 None 而非伪装成 0"""
     if spend == 0:
-        return 0
+        return None
     return round(conversion_value / spend, 2)
 
 
-def calculate_ctr(clicks: int, impressions: int) -> float:
+def calculate_ctr(clicks: int, impressions: int) -> Optional[float]:
     if impressions == 0:
-        return 0
+        return None
     return round((clicks / impressions) * 100, 2)
 
 
-def calculate_cpc(spend: float, clicks: int) -> float:
+def calculate_cpc(spend: float, clicks: int) -> Optional[float]:
     if clicks == 0:
-        return 0
+        return None
     return round(spend / clicks, 2)
+
+
+def _fmt_metric(value, unit="", na="无意义（分母为 0，未投放/无曝光）"):
+    """None 指标的诚实渲染: 不把'无意义'伪装成数值 0"""
+    return na if value is None else "%s%s" % (value, unit)
 
 
 def compare_platforms(platform_data):
@@ -95,10 +101,12 @@ def _fallback_analysis(combined_data: dict) -> str:
         "- 总点击: %s" % overall.get("total_clicks", 0),
         "- 总转化: %s" % overall.get("total_conversions", 0),
         "- 总转化金额: ¥%s" % overall.get("total_conversion_value", 0),
-        "- 整体 ROI: %s" % overall.get("overall_roi", 0),
-        "- 整体 CTR: %s" % overall.get("overall_ctr", 0),
-        "- 整体 CPC: ¥%s" % overall.get("overall_cpc", 0),
+        "- 整体 ROI: %s" % _fmt_metric(overall.get("overall_roi")),
+        "- 整体 CTR: %s" % _fmt_metric(overall.get("overall_ctr"), unit="%"),
+        "- 整体 CPC: %s" % _fmt_metric(overall.get("overall_cpc"), unit="¥"),
     ]
+    if combined_data.get("zero_spend_note"):
+        lines.append("- %s" % combined_data["zero_spend_note"])
     pc = combined_data.get("platform_comparison", {}) or {}
     if pc.get("best_roas_platform"):
         lines.append("- 最高 ROAS 平台: %s (ROAS %s)" % (pc.get("best_roas_platform"), pc.get("best_roas")))
@@ -187,6 +195,25 @@ def ads_skill(user_input: str):
     )
     overall_cpc = calculate_cpc(total_spend, total_clicks)
 
+    # T21: 花费为 0 的广告/渠道, ROI/CPC 无意义(分母为 0), 显式标注防 LLM 编造
+    zero_spend_ads = [a for a in ads_summary if a.get("spend") == 0]
+    if total_spend == 0:
+        zero_spend_note = (
+            "统计期内整体总花费为 0（无投放），所有 ROI/ROAS/CPC 指标无意义，"
+            "不得给出任何回报数值。"
+        )
+    elif zero_spend_ads:
+        names = ", ".join(
+            (a.get("ad_name") or a.get("ad_id") or "未知广告")
+            for a in zero_spend_ads[:5]
+        )
+        zero_spend_note = (
+            "以下广告花费为 0（未投放），其 ROI/ROAS/CPC 无意义，"
+            "应说明'未投放'而非给出数值：%s" % names
+        )
+    else:
+        zero_spend_note = ""
+
     platform_comparison = compare_platforms(platform_data)
 
     combined_data = {
@@ -206,6 +233,7 @@ def ads_skill(user_input: str):
         "extracted_ad_id": extracted_ad_id,
         "requested_ad_missing": requested_ad_missing,
         "honesty_note": honesty_note,
+        "zero_spend_note": zero_spend_note,
         "user_input": user_input,
     }
 
