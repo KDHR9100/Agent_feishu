@@ -483,7 +483,9 @@ def _enrich_input_with_history(user_input, state):
                           if m.get("role") == "user"][:2]
             if first_user:
                 parts.append("[对话开头用户消息]\n" + "\n".join(first_user))
-        # M15: "最早/首个"类追问 —— 追加确定性的 SKU 提及顺序清单
+        # M15: "最早/首个"类追问 —— 追加确定性的 SKU 提及顺序清单,
+        # 并直接给出解析结论 (M15 复测发现: 仅给清单时弱模型仍会无视,
+        # 必须把"最早是谁"的结论明示出来)
         if any(m in user_input for m in _FIRST_MENTION_MARKS):
             history = state.get("history") or []
             skus = _extract_skus_in_order(
@@ -494,6 +496,10 @@ def _enrich_input_with_history(user_input, state):
                 parts.append(
                     "[对话中提到的SKU(按提及顺序, 第一个即最早)]: %s"
                     % " -> ".join(skus)
+                )
+                parts.append(
+                    "[上下文解析结论] 用户追问的\"最开始/最早提到的商品\"就是 **%s**，"
+                    "请围绕该 SKU 回答，不要使用其他 SKU。" % skus[0]
                 )
         if not parts:
             return user_input

@@ -190,7 +190,7 @@ class TestFocusSkuInjection:
         assert skus == ["SKU-M01", "SKU-M02"]
 
     def test_first_mention_query_injects_ordered_list(self):
-        """M15: 窗口边缘回忆首个 SKU -> 注入按提及顺序的清单"""
+        """M15: 窗口边缘回忆首个 SKU -> 注入按提及顺序的清单 + 解析结论"""
         from app.agent.workflow import _enrich_input_with_history
 
         state = {
@@ -205,6 +205,9 @@ class TestFocusSkuInjection:
         assert "[对话中提到的SKU(按提及顺序" in enriched
         # 第一个即最早: M14 在清单首位
         assert enriched.index("SKU-M14") < enriched.index("SKU-M15")
+        # 弱模型防无视: 直接给出解析结论
+        assert "[上下文解析结论]" in enriched
+        assert "**SKU-M14**" in enriched
 
     def test_pronoun_input_injects_last_sku(self):
         """M14b: "那它的利润率呢" -> 注入最近提到的商品"""
