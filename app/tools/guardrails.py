@@ -59,6 +59,26 @@ _REVIEW_SYSTEM_PROMPT = (
 )
 
 
+def _record_review_usage(resp_json):
+    """裸 requests 调用不经 LangChain 回调, 手工记账 token 消耗 (失败静默, 不影响裁决)"""
+    try:
+        usage = (resp_json or {}).get("usage") or {}
+        input_tokens = int(usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or 0)
+        if input_tokens <= 0 and output_tokens <= 0:
+            return
+        from app.monitoring import monitoring_stats
+
+        monitoring_stats.record_token_usage(
+            skill_name="guardrails",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            conversation_id="",
+        )
+    except Exception:
+        pass
+
+
 def _llm_review(user_input: str):
     """LLM 二次确认, 返回 allow/block/redirect; 任何异常返回 None (由调用方回退关键词裁决)"""
     try:
@@ -86,7 +106,9 @@ def _llm_review(user_input: str):
             logger.warning(
                 "[Guardrails] LLM review HTTP %s, fallback to keyword verdict", resp.status_code)
             return None
-        content = (resp.json()["choices"][0]["message"]["content"] or "").strip().lower()
+        body = resp.json()
+        _record_review_usage(body)
+        content = (body["choices"][0]["message"]["content"] or "").strip().lower()
         for verdict in ("block", "redirect", "allow"):
             if verdict in content:
                 return verdict

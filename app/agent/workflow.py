@@ -392,7 +392,9 @@ def _run_unknown_skill(state, user_input):
 
     llm_start = time.time()
     try:
-        response = _call_llm(llm, messages)
+        # 归属标签: 闲聊兜底的 LLM 调用计入 "chitchat" (否则会被记账层丢弃)
+        with track_as("chitchat", state.get("conversation_id", "")):
+            response = _call_llm(llm, messages)
         llm_duration = time.time() - llm_start
         monitoring_stats.record_llm_call(llm_duration)
 

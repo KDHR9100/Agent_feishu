@@ -148,3 +148,98 @@ class TestMetricsEndpoint:
         source = inspect.getsource(main_mod)
         assert "/metrics/usage" in source
         assert "get_usage_last_24h" in source
+
+
+class TestTokenCoverage:
+
+    def _fake_llm_result(self, prompt=100, completion=20):
+        """构造带 token_usage 的 LLMResult 替身"""
+        result = MagicMock()
+        result.llm_output = {"token_usage": {
+            "prompt_tokens": prompt, "completion_tokens": completion}}
+        return result
+
+    def test_unattributed_calls_are_not_dropped(self, monkeypatch):
+        """未标记 track_as 的 LLM 调用归入 unattributed, 不再静默丢弃"""
+        recorded = []
+
+        def _spy(skill_name, input_tokens, output_tokens, conversation_id=""):
+            recorded.append((skill_name, input_tokens, output_tokens))
+
+        import app.monitoring as mon_pkg
+        monkeypatch.setattr(mon_pkg.monitoring_stats, "record_token_usage", _spy)
+
+        from app.utils import token_tracker as tt
+        handler = tt.TokenTrackingHandler()
+        # 清空线程上下文: 模拟未设 track_as 的调用路径
+        monkeypatch.setattr(tt, "get_context", lambda: (None, None))
+        handler.on_llm_end(self._fake_llm_result(prompt=500, completion=80))
+
+        assert recorded == [("unattributed", 500, 80)]
+
+    def test_attributed_calls_keep_owner(self, monkeypatch):
+        """已标记归属的调用不受兜底逻辑影响"""
+        recorded = []
+
+        def _spy(skill_name, input_tokens, output_tokens, conversation_id=""):
+            recorded.append((skill_name, input_tokens, output_tokens))
+
+        import app.monitoring as mon_pkg
+        monkeypatch.setattr(mon_pkg.monitoring_stats, "record_token_usage", _spy)
+
+        from app.utils import token_tracker as tt
+        handler = tt.TokenTrackingHandler()
+        monkeypatch.setattr(tt, "get_context",
+                            lambda: ("router", "conv-1"))
+        handler.on_llm_end(self._fake_llm_result(prompt=300, completion=10))
+
+        assert recorded == [("router", 300, 10)]
+
+    def test_zero_usage_still_skipped(self, monkeypatch):
+        """无 token 数据(如流式无 usage)仍不记账, 避免噪声行"""
+        recorded = []
+
+        def _spy(*args, **kwargs):
+            recorded.append(args)
+
+        import app.monitoring as mon_pkg
+        monkeypatch.setattr(mon_pkg.monitoring_stats, "record_token_usage", _spy)
+
+        from app.utils import token_tracker as tt
+        handler = tt.TokenTrackingHandler()
+        monkeypatch.setattr(tt, "get_context", lambda: (None, None))
+        handler.on_llm_end(self._fake_llm_result(prompt=0, completion=0))
+
+        assert recorded == []
+
+
+class TestGuardrailsUsageRecording:
+
+    def test_review_usage_recorded(self, monkeypatch):
+        """guardrails 裸 requests 调用的 token 手工记账"""
+        recorded = []
+
+        def _spy(skill_name, input_tokens, output_tokens, conversation_id=""):
+            recorded.append((skill_name, input_tokens, output_tokens))
+
+        import app.monitoring as mon_pkg
+        monkeypatch.setattr(mon_pkg.monitoring_stats, "record_token_usage", _spy)
+
+        from app.tools.guardrails import _record_review_usage
+        _record_review_usage({"usage": {"prompt_tokens": 420, "completion_tokens": 3}})
+        assert recorded == [("guardrails", 420, 3)]
+
+    def test_review_usage_missing_is_noop(self, monkeypatch):
+        recorded = []
+
+        def _spy(*args, **kwargs):
+            recorded.append(args)
+
+        import app.monitoring as mon_pkg
+        monkeypatch.setattr(mon_pkg.monitoring_stats, "record_token_usage", _spy)
+
+        from app.tools.guardrails import _record_review_usage
+        _record_review_usage({})
+        _record_review_usage(None)
+        _record_review_usage({"usage": {"prompt_tokens": 0, "completion_tokens": 0}})
+        assert recorded == []

@@ -86,10 +86,13 @@ Return ONLY valid JSON:
 
 def get_judge_llm(base_url=None):
     if base_url:
+        from app.utils.token_tracker import TokenTrackingHandler
+
         return ChatOpenAI(
             base_url=base_url, api_key="lm-studio",
             model="deepseek-r1-distill-nsfw-rp-vredux-proper.i1",
             temperature=0, timeout=30,
+            callbacks=[TokenTrackingHandler()],
         )
     return get_llm()
 
@@ -116,6 +119,7 @@ def run_routing_eval():
 
 def run_judge_eval(judge_llm, responses=None):
     import re
+    from app.utils.token_tracker import track_as
     from app.agent.router import router
     results = []
     for item in EVAL_SET:
@@ -129,7 +133,9 @@ def run_judge_eval(judge_llm, responses=None):
             reference_keywords=", ".join(item["reference_keywords"]),
         )
         try:
-            resp = judge_llm.invoke([HumanMessage(content=prompt)])
+            # 归属标签: 评审调用计入 "judge", 否则被记账层静默丢弃
+            with track_as("judge"):
+                resp = judge_llm.invoke([HumanMessage(content=prompt)])
             raw = resp.content if hasattr(resp, "content") else str(resp)
             m = re.search(r"\{.*\}", raw, re.DOTALL)
             scores = json.loads(m.group(0)) if m else {"relevance": 0, "accuracy": 0, "completeness": 0}
