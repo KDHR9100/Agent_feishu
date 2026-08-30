@@ -73,11 +73,48 @@ def send_chat(msg, conv, timeout=300, user_id="probe"):
                           json={"message": msg, "conversation_id": conv, "user_id": user_id},
                           timeout=timeout)
         el = round(time.time() - t0, 2)
+        # 429 单次退避重试: 探针自身触发限流(如 rl 阶段滑动窗口残留)不应记为被测系统失败
+        if r.status_code == 429:
+            time.sleep(30)
+            r = requests.post(BASE_URL + "/chat", headers=HDRS,
+                              json={"message": msg, "conversation_id": conv, "user_id": user_id},
+                              timeout=timeout)
+            el = round(time.time() - t0, 2)
         if r.status_code != 200:
             return None, el, "HTTP %d %s" % (r.status_code, r.text[:150])
         return r.json(), el, None
     except Exception as e:
         return None, round(time.time() - t0, 2), str(e)[:150]
+
+
+def llm_preflight():
+    """LLM 健康预检: 用一次最小调用验证配额/密钥可用。
+
+    动机: 全量探针曾因 LLM 配额在开跑瞬间耗尽, 跑了一小时全在测降级模式,
+    85 条结果全部作废。预检可在开跑前 fail-fast, 避免浪费整轮跑批。
+    --allow-degraded 可跳过 (刻意测量降级模式时使用, 结果文件名会标注)。
+    """
+    if not LLM_KEY:
+        print("[preflight] LLM_API_KEY 未配置, 无法预检")
+        return False
+    try:
+        r = requests.post(LLM_BASE + "/chat/completions",
+                          headers={"Authorization": "Bearer " + LLM_KEY},
+                          json={"model": LLM_MODEL, "temperature": 0,
+                                "max_tokens": 4,
+                                "messages": [{"role": "user", "content": "OK"}]},
+                          timeout=30)
+        body = r.json()
+        if r.status_code == 200 and "choices" in body:
+            print("[preflight] LLM 健康 (%s @ %s)" % (LLM_MODEL, LLM_BASE))
+            return True
+        # 常见错误: insufficient_quota / InvalidApiKey
+        msg = (body.get("error") or {}).get("message", "") or r.text[:120]
+        print("[preflight] LLM 不可用: HTTP %d %s" % (r.status_code, msg))
+        return False
+    except Exception as e:
+        print("[preflight] LLM 不可用: %s" % str(e)[:120])
+        return False
 
 
 def llm_judge(msg, goal, answer):
@@ -698,7 +735,8 @@ def phase_rl():
             "passed": n429 >= 5 and n200 <= 30,
             "reason": "200=%d, 429=%d (期望约30/5)" % (n200, n429)})
 
-    time.sleep(5)  # 冷却避免 429 污染后续用例
+    # 冷却须长于限流滑动窗口(60s), 否则窗口残留配额会污染后续阶段用例
+    time.sleep(65)
     qs = [("probe_c52a_%s" % RUN_ID, "哪些商品库存告急？", "inventory_skill"),
           ("probe_c52b_%s" % RUN_ID, "昨天广告ROI多少？", "ads_skill")]
 
@@ -943,6 +981,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", default="all")
     ap.add_argument("--no-judge", action="store_true")
+    ap.add_argument("--allow-degraded", action="store_true",
+                    help="LLM 预检失败时仍继续 (刻意测量降级模式; 结果不可作健康基线)")
     args = ap.parse_args()
     if args.no_judge:
         USE_JUDGE = False
@@ -952,6 +992,14 @@ def main():
     except Exception as e:
         print("服务不可达: %s" % e)
         sys.exit(1)
+
+    # LLM 健康预检: 配额耗尽/密钥失效时 fail-fast, 避免整轮跑批测的是降级模式
+    degraded = not llm_preflight()
+    if degraded and not args.allow_degraded:
+        print("LLM 预检失败, 中止 (如需刻意测量降级模式请加 --allow-degraded)")
+        sys.exit(1)
+    if degraded:
+        print("!!! 降级模式跑批: 路由走关键词兜底, 结果仅反映降级行为 !!!")
 
     names = list(PHASES) if args.phase == "all" else [s.strip() for s in args.phase.split(",")]
     for n in names:
