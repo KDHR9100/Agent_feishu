@@ -125,3 +125,9 @@ test_report_*.md
 # Misnamed scripts accidentally created at repo root (含反斜杠路径的误创建文件)
 [Cc]:[\]temp[\]*.py
 *setup_batch*.py
+
+# Rotated application logs
+app.log.*
+
+# Session tooling
+.zcode/

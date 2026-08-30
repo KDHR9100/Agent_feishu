@@ -53,7 +53,7 @@ LangGraph agent.invoke() --- 状态机工作流
     |
     +- load_history    加载最近 30 条对话历史 + 长对话摘要
     +- load_file       解析上传文件（若有）
-    +- router          意图识别 + 技能路由（三层递进，工具清单随 manifest 热更新）
+    +- router          意图识别 + 技能路由（四层递进，工具清单随 manifest 热更新）
     +- planner         复合指令生成顺序执行计划（Plan-Execute）
     +- skill_executor  按计划顺序执行 1~N 个技能（高危操作走审批门）
     +- reflect         ReAct 反思：LLM 判断结果是否充分
@@ -77,21 +77,22 @@ feishu_tool.reply_message() --- 回复用户
 | Embedding | sentence-transformers | 本地 paraphrase-multilingual-MiniLM-L12-v2 |
 | 文档管理 | SHA-256 + 增量更新 | 变更检测、查询缓存 |
 | 飞书集成 | lark-oapi | WebSocket 长连接、AES 消息解密 |
-| 数据存储 | SQLite(WAL) + SQLAlchemy | 对话全量归档、摘要持久化、回滚登记落库；WAL + busy timeout 支撑多线程并发写 |
+| 会话/审计存储 | SQLite(WAL) + SQLAlchemy | 对话全量归档、摘要持久化、回滚登记落库、token/业务日志；WAL + busy timeout 支撑多线程并发写 |
+| 业务数据层 | CSV（database_tool） | product_sales.csv / ads_performance.csv 读取与聚合（支持时间范围/渠道过滤）；存在 `data_real/` 时自动切换真实业务数据，否则用 `data/` 演示数据，`BIZ_DATA_DIR` 可显式指定 |
 | 文件解析 | pandas, openpyxl, PyPDF2, python-docx | Excel/CSV/PDF/Word |
-| 安全防护 | Guardrails + pycryptodome | 输入检测、飞书消息 AES 解密 |
+| 安全防护 | Guardrails + pycryptodome | 关键词快筛 + 业务比喻白名单 + LLM 二次确认（fail-safe 回退）；飞书消息 AES 解密 |
 | 定时任务 | APScheduler | 库存预警、日报生成 |
 | 中文分词 | jieba | BM25 检索分词 |
 | 技能注册 | MCP manifest | skills_manifest.json 动态热插拔（mtime 检测，免重启） |
 | 可观测性 | Token 回调记账 | router/planner/技能/reflect/answer 分技能统计 |
-| 审批流 | 飞书交互卡片 | card.action.trigger 回调 + 后台执行 + SQLite 动作日志 |
+| 审批流 | 飞书交互卡片 | card.action.trigger 回调 + 后台执行（真实动作）/ 决策登记（调价）+ SQLite 动作日志 |
 | 业务度量 | BusinessTaskLog | 按用户记录任务（user_id/技能/成败/耗时），/metrics/business 输出活跃用户、成功率与节省工时估算 |
 | 流量防护 | 滑动窗口限流 | 按用户 RATE_LIMIT_PER_MINUTE 限流，/chat 返回 429，飞书入口友好提示 |
 | 多模态 | VLM | 图片解析为结构化表格（file_analysis_skill） |
 | LLM 容错 | invoke_with_recovery | 上下文超限裁剪重试 + 限流指数退避 + 备用模型自动切换 |
 | 持久记忆 | persistent_memory | 从用户输入提取长期记忆，注入 system prompt 增强个性化 |
 | Hooks | hooks.py | PreToolUse / PostToolUse / UserPromptSubmit 生命周期钩子 |
-| 路由加速 | 关键词快速路径 + 结果缓存 | 高置信关键词命中跳过 LLM（≈0ms），temperature=0 路由结果缓存复用 |
+| 路由加速 | 定价指令确定性快路径 + 结果缓存 | 明示调价指令结构化判别直达 pricing_skill（不经 LLM）；temperature=0 路由结果缓存复用；关键词快速路径默认关闭可选开启 |
 
 ---
 
@@ -114,7 +115,7 @@ feishu_tool.reply_message() --- 回复用户
 
 - reflect_decision == "insufficient" -> 回到 router，携带 reflect_feedback 指导重新路由
 - reflect_decision == "sufficient" -> 进入 answer
-- 短路规则：file_analysis_skill 和 rag_skill 跳过 reflect 直接 sufficient
+- 短路规则：file_analysis_skill / rag_skill / help_skill 跳过 reflect 直接 sufficient；所有技能结果均无错误时也直接 sufficient（省去一次反思 LLM 调用）；注入拦截结果直接 sufficient
 - 防死循环：retry_count >= MAX_RETRIES (2) 时强制 sufficient
 - 容错：reflect LLM 超时 20 秒，异常时 fail-open 为 sufficient
 
@@ -126,30 +127,32 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 
 ## 3. 路由机制
 
-路由采用四层递进策略，确保高可用：
+路由采用四层递进策略，确保高可用。路由入口先做注入检测（用户输入 + 上传文件内容双防线），命中直接拦截：
 
 ### 第一层：文件快捷路由
 
-若 file_path 和 file_content 都存在，且用户输入为空/以 [文件] 开头/包含文件相关关键词（解析、分析、查看、解读等），直接路由到 file_analysis_skill，跳过 LLM 调用。
+若存在 file_path，且用户输入为空/以 [文件] 开头/包含文件相关关键词（解析、分析、查看、解读等），直接路由到 file_analysis_skill，跳过 LLM 调用。文件内容经 wrap_untrusted 分隔符隔离，降低间接注入风险。
 
 ### 第二层：定价指令确定性快路径
 
 明示调价指令（目标价/涨跌幅/折扣）经 `pricing_skill.has_explicit_directive` 结构化判别命中后，直接路由到 pricing_skill，跳过 LLM——**安全关键路径的路由不依赖 LLM 能力**（弱模型/降级模式下"SKU-A001改价到99"曾被误路由到商品分析技能，调价审批门被整条绕过）。判别基于指令结构解析而非裸关键词：竞品语境（"竞品把价格杀到99了"）、咨询句式（"要不要降价"）、创作素材（"写降价文案"）等歧义输入不触发；其余技能关键词 conf>=2 的复合指令交回 LLM/规划器。可通过 `ROUTER_PRICING_DIRECTIVE_FAST_PATH` 关闭。
 
-### 第三层：LLM Tool-Calling
+### 第三层：路由缓存 + LLM Tool-Calling
 
-将 13 个技能封装为 StructuredTool，通过 llm.bind_tools(tools) 让 LLM 以 function calling 方式选择技能。支持多技能选择。超时 30 秒。
+- **路由结果缓存**：temperature=0 下路由结果确定性保证，相同输入+相同会话上下文直接复用缓存（TTL 600s，MAXSIZE 512）。manifest 版本纳入缓存 key，热更新后旧缓存自动失效。
+- **LLM Tool-Calling**：将 13 个技能封装为 StructuredTool，通过 llm.bind_tools(tools) 让 LLM 以 function calling 方式选择技能，支持多技能选择。Router LLM 独立配置：HTTP 请求超时 15 秒（ChatOpenAI timeout，快速失败）+ 外层 20 秒硬超时（@timeout 装饰器，共享线程池 future）、0 重试、temperature=0、关闭 thinking。
 
-### 第四层：交叉验证 + Keyword Fallback
+### 第四层：交叉验证（可选）+ Keyword Fallback
 
-- 交叉验证：LLM 选择后，用关键词评分验证。若关键词最高分技能与 LLM 不同且置信度 >= 2，则关键词结果优先。
-- Keyword Fallback：LLM 调用超时或异常时，使用 KEYWORD_RULES 进行关键词匹配。
+- 交叉验证（**默认关闭**，`ROUTER_KEYWORD_OVERRIDE=true` 开启）：LLM 选择后用关键词评分验证，关键词最高分技能与 LLM 不同且置信度 >= 2 时关键词优先；关键词检测到 2+ 技能而 LLM 只返回 1 个时合并补充。当前默认意图识别以路由 LLM 为准，关键词不做常态干预。
+- Keyword Fallback：LLM 调用超时或异常时，使用 KEYWORD_RULES 进行关键词匹配兜底。
 - 最终 Fallback：关键词也无匹配 -> intent = "unknown" -> LLM 闲聊兜底。
 
 ### 性能优化
 
-- **关键词快速路径**：高置信关键词唯一命中（conf >= 2 且无并列）时跳过 LLM，路由耗时 ≈ 0ms。反思重试轮不走快速路径。
-- **路由结果缓存**：temperature=0 下路由结果确定性保证，相同输入+相同会话上下文直接复用缓存（TTL 600s，MAXSIZE 512）。manifest 版本纳入缓存 key，热更新后旧缓存自动失效。
+- **定价指令确定性快路径**：安全关键指令零 LLM 开销直达审批技能（见第二层）。
+- **关键词快速路径**（**默认关闭**，`ROUTER_KEYWORD_FAST_PATH=true` 开启）：高置信关键词唯一命中（conf >= 2 且无并列）时跳过 LLM，路由耗时 ≈ 0ms；反思重试轮不走快速路径。当前默认以路由 LLM 为主，仅在需要极致响应速度时启用。
+- **路由结果缓存**：见第三层。
 
 ### 动态热插拔（MCP manifest）
 
@@ -160,21 +163,19 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 
 | # | 技能名 | 功能 | 触发关键词 | 实现方式 |
 |---|--------|------|-----------|---------|
-| 1 | product_skill | 商品销售数据分析、趋势、利润率、SKU 对比 | 商品、销量、SKU、评价、卖得 | DB 查询 + 趋势/利润计算 + LLM 报告 |
-| 2 | ads_skill | 广告投放效果、ROI/CTR/CPC、渠道对比 | 广告、投放、ROI、推广、花费、渠道 | DB 查询 + 指标计算 + 平台对比 + LLM |
-| 3 | inventory_skill | 库存预警、补货建议、周转分析 | 库存、补货、预警、周转、缺货 | DB 全量查询 + 按品类阈值检测 |
+| 1 | product_skill | 商品销售数据分析、趋势、利润率、SKU 对比 | 商品、销量、SKU、评价、卖得 | CSV 数据查询（database_tool）+ 趋势/利润计算 + LLM 报告（数据诚实性：查无此 SKU 时如实标注） |
+| 2 | ads_skill | 广告投放效果、ROI/CTR/CPC、渠道对比 | 广告、投放、ROI、推广、花费、渠道 | CSV 数据查询 + 指标计算 + 平台对比 + LLM（LLM 失败时降级返回原始聚合指标） |
+| 3 | inventory_skill | 库存预警、补货建议、周转分析 | 库存、补货、预警、周转、缺货 | CSV 全量查询 + 按品类阈值检测（electronics 50 / clothing 100 / food 100 / beauty 200 / 默认 100） |
 | 4 | competitor_skill | 竞品分析、市场竞争情报 | 竞品、竞争、对手、市场情报 | LLM 直接回答（截断 500 字符） |
 | 5 | report_skill | 运营报告生成并保存为 Markdown | 报告、周报、月报、汇总 | LLM 总结 + file_tool 写入 reports/ |
 | 6 | rag_skill | 知识库检索增强问答 | 规则、佣金、上架、平台规则、怎么算 | 混合检索 + LLM 生成 |
 | 7 | seo_skill | SEO 优化、关键词研究、标题优化 | SEO、关键词、搜索量、标题优化、长尾词 | keyword_tool 查询 + LLM 分析 |
 | 8 | support_skill | 客服：订单查询、退换货、物流、售后 | 订单、退款、退货、售后、客服、物流 | 意图分类 + ticket_tool + LLM |
-| 9 | data_analysis_skill | 深度数据分析、趋势、异常检测 | 趋势、异常、同比、环比、统计 | DB 查询 + 基础统计 + LLM 专业分析 |
+| 9 | data_analysis_skill | 深度数据分析、趋势、异常检测 | 趋势、异常、同比、环比、统计 | CSV 数据查询（自然语言时间范围解析）+ 基础统计 + LLM 专业分析（Prompt 内置数据诚实性铁律，严禁编造） |
 | 10 | file_analysis_skill | 文件解析分析报告 | 解析文件、分析文件、这个表格、这份数据 | 已解析 file_content + LLM 结构化报告 |
 | 11 | help_skill | 使用帮助、功能介绍 | 帮助、你能做什么、功能、怎么用 | HELP_PROMPT + LLM |
-| 12 | listing | Listing 生成：商品图片 → 多语言合规标题/五点描述/商品描述/后台关键词（含违禁词合规审核） | listing、标题、描述、商品详情、重新生成 | 多模态图片识别 + 平台规则 + 合规审核 |
+| 12 | listing | Listing 生成：商品图片 → 多语言合规标题/五点描述/商品描述/后台关键词（含违禁词合规审核） | listing、标题、描述、商品详情、重新生成 | 多模态图片识别 + CrossLister 多语言生成服务 + 合规审核 |
 | 13 | pricing_skill | L4 智能定价（问价/调价分离）：问价咨询（"卖多少钱合适"）与"我降到X行不行"均输出蒙特卡洛沙盒测算建议，不改价；明示调价指令（目标价/涨跌幅/折扣）经确定性快路径直达本技能，先跑沙盒验证再发审批卡片，点批准后**登记调价决策并引导在电商平台商家后台手动改价**（Agent 不直接操作平台）；批量调价直接拒绝 | 定价、活动价、调价、卖多少钱、降价 20%、改价到 99、打个八八折 | profit_model + solver_engine 蒙特卡洛模拟 + 审批门 + 决策登记 |
-
-库存预警阈值（按品类）：electronics: 50, clothing: 100, food: 100, beauty: 200, 默认: 100
 
 ---
 
@@ -284,13 +285,19 @@ LLM-as-Judge 评估（app/eval/llm_judge.py）：
 
 ## 6. Guardrails 安全防护
 
-纯关键词匹配，在飞书消息处理层（Agent 调用之前）拦截：
+在飞书消息处理层（Agent 调用之前）拦截，采用「关键词快筛 → 业务比喻白名单 → LLM 二次确认」的裁决链路：
+
+1. **业务比喻白名单先行剥离**："杀人价""像股票一样"等高置信电商口语比喻在关键词匹配前剥离——降级模式下不误杀业务黑话，健康模式下无命中直接放行、省一次 LLM 确认调用。
+2. **关键词快筛**：命中只作为"嫌疑信号"，不直接定罪：
 
 | 类型 | 关键词 | 动作 |
 |------|--------|------|
-| BLOCKED（拦截） | 政治、政府、颠覆、反动、爆炸、杀人、毒品、武器、赌博、诈骗、盗版、黑客 | 直接返回拒绝消息 |
-| REDIRECT（重定向） | 看病、医疗、股票、基金 | 返回引导消息 |
+| BLOCKED（拦截） | 政治、政府、颠覆、反动、爆炸、杀人、毒品、武器、赌博、诈骗、盗版、黑客 | 拒绝消息 |
+| REDIRECT（重定向） | 看病、医疗、股票、基金 | 引导消息 |
 | ALLOW（放行） | 其他所有输入 | 正常进入 Agent 流程 |
+
+3. **LLM 二次确认**：对嫌疑输入做语义裁决，避免"写降价文案"这类子串误杀。
+4. **fail-safe 回退**：LLM 不可用/超时/解析失败时回退关键词裁决，行为与旧版一致，安全链路不中断。
 
 ---
 
@@ -336,6 +343,8 @@ LocalMemory 双层存储架构（归档式持久化）：
 - 消息解密：AES 解密（pycryptodome）
 - 进程管理：ws_manager 管理 WebSocket 子进程，最大重启 5 次，冷却 30 秒
 - 流式体验：收到消息立即回执"已收到，正在思考..."，路由/规划/执行各阶段推送"思考过程"进度消息
+- 问候语拦截：短文本问候/能力询问（正则关键词命中）直接回自我介绍卡片，不进 Agent
+- 回答渲染：含 Markdown 结构的回答自动转飞书卡片（标题/列表/表格），卡片失败降级纯文本
 - 多模态：图片消息下载后经 VLM 解析为结构化表格内容参与分析
 - 审批交互：高危操作发送交互卡片（批准/拒绝按钮），card.action.trigger 回调（WS 长连接事件帧）3 秒内响应，批准后后台线程处理并推送回执（调价动作登记决策并附商家后台手动执行引导，其余动作执行并推送结果）
 
@@ -362,7 +371,7 @@ LocalMemory 双层存储架构（归档式持久化）：
 
 | 任务 | 说明 |
 |------|------|
-| inventory_check | 库存预警检查，按品类阈值检测低库存 |
+| inventory_check | 每 4 小时库存巡检：按「当前库存 < 当日销量 × 2」检测低库存并告警日志（按品类阈值表检测用于 inventory_skill 的用户查询，两者口径不同） |
 | daily_report | 日报生成 |
 | weekly_business_report | 每周一 09:30 生成业务价值报告（活跃用户/任务量/节省工时），保存到 data/reports/ |
 | log_retention_cleanup | 每日 03:00 清理超过 LOG_RETENTION_DAYS（默认 90 天）的 token_usage_logs / business_task_logs，防止日志表无限增长 |
@@ -386,7 +395,7 @@ Agent_feishu/
 │   │   └── persistent_memory.py  # 持久记忆（从用户输入提取长期记忆 + 检索注入）
 │   ├── models/
 │   │   ├── database.py           # SQLAlchemy 引擎（SQLite WAL + busy timeout）
-│   │   └── models.py             # 8 张 ORM 表（含 ConversationSummary 摘要持久化、PendingAction 回滚登记）
+│   │   └── models.py             # 6 张 ORM 表（含 ConversationSummary 摘要持久化、PendingAction 回滚登记）；另有 action_log 审计表由 utils/action_log.py 标准库 sqlite 自动建
 │   ├── monitoring/
 │   │   ├── stats.py              # 监控统计
 │   │   └── business.py           # 业务价值度量（DAU/成功率/节省工时）
@@ -416,12 +425,13 @@ Agent_feishu/
 │   ├── tools/
 │   │   ├── feishu_ws.py          # 飞书 WebSocket 长连接
 │   │   ├── feishu_tool.py        # 飞书 API 封装
-│   │   ├── file_parser_tool.py   # 文件解析（CSV/Excel/PDF/Word）
+│   │   ├── file_parser_tool.py   # 文件解析（CSV/Excel 全 Sheet/PDF/Word/图片 VLM）
 │   │   ├── file_tool.py          # 文件读写（路径穿越防护）
-│   │   ├── guardrails.py         # 输入安全检测
-│   │   ├── database_tool.py      # 数据库查询
+│   │   ├── guardrails.py         # 输入安全检测（关键词快筛 + 业务比喻白名单 + LLM 二次确认）
+│   │   ├── database_tool.py      # CSV 业务数据读写（data_real/ 自动探测）
 │   │   ├── keyword_tool.py       # SEO 关键词分析
-│   │   ├── ticket_tool.py        # 工单管理
+│   │   ├── ticket_tool.py        # 工单管理（独立 tickets.db）
+│   │   ├── crosslister_client.py # CrossLister Listing 生成微服务 HTTP 客户端
 │   │   └── ws_manager.py         # WebSocket 进程管理
 │   ├── mcp_server/
 │   │   └── registry.py           # MCP 技能注册中心（manifest 热加载 + version 计数）
@@ -434,16 +444,21 @@ Agent_feishu/
 │   │   ├── tracing.py            # 节点耗时追踪
 │   │   ├── rate_limiter.py       # 滑动窗口限流器（每用户每分钟阈值）
 │   │   ├── llm_retry.py          # LLM 调用错误恢复（分类+退避+备用模型切换）
-│   │   ├── hooks.py              # 生命周期钩子（PreToolUse/PostToolUse/UserPromptSubmit）
-│   │   ├── default_hooks.py      # 默认钩子注册
+│   │   ├── hooks.py              # 生命周期钩子（UserPromptSubmit/PreToolUse/PostToolUse/Stop）
+│   │   ├── default_hooks.py      # 默认审计钩子注册
 │   │   ├── todo_manager.py       # Plan-Execute 任务进度追踪
+│   │   ├── md_render.py          # Markdown 回答转飞书卡片渲染
+│   │   ├── time_utils.py         # 自然语言时间范围解析（今天/上周/5月等）
 │   │   └── background_tasks.py   # 后台任务管理
 │   ├── config.py                 # 配置管理（环境变量）
 │   ├── prompts.py                # Prompt 模板
 │   └── main.py                   # FastAPI 入口
 ├── data/
+│   ├── product_sales.csv         # 演示业务数据：商品销售（存在 data_real/ 时自动切换真实数据）
+│   ├── ads_performance.csv       # 演示业务数据：广告投放
 │   ├── documents/                # 知识库文档（.txt/.md）
 │   ├── uploads/                  # 上传文件
+│   ├── reports/                  # 报告/评估产物输出目录
 │   └── vectorstore/              # FAISS 索引 + 哈希注册表 + 查询缓存
 ├── tests/                        # 单元测试 + tests/integration 集成流程（详见第 16 节）
 ├── scripts/
@@ -652,11 +667,12 @@ docker compose down
 | POST | /sentinel/check | L4 市场哨兵触发检查 |
 | POST | /executor/confirm/{action_id} | L4 执行器确认动作 |
 | GET | /executor/status/{action_id} | L4 执行器动作状态查询 |
+| GET | /executor/pending | L4 执行器待确认动作列表 |
 | POST | /feishu/webhook | 飞书事件回调（url_verification + im.message.receive_v1） |
 | POST | /feishu/message | 主动发送飞书消息（chat_id + content） |
 | POST | /feishu/chat | 飞书渠道对话（直接调用 Agent 工作流） |
 
-> /chat、/rag/query、/approval 等写接口受 X-API-Key 鉴权保护（环境变量 API_KEY 配置）。**默认拒绝（fail-closed）**：未配置 API_KEY 时这些接口返回 503，配置后需携带匹配的 `X-API-Key` 请求头，避免服务在未鉴权状态下暴露。
+> /chat、/rag/query、/documents（写）、/rag/sync、/metrics/usage、/metrics/business、/approval、/optimize/*、/sentinel/check、/executor/* 等敏感接口受 X-API-Key 鉴权保护（环境变量 API_KEY 配置）；/feishu/* 与状态查询类端点（/、/health、/ws/status、/tasks/status、/rag/status、/documents 列表）除外。**默认拒绝（fail-closed）**：未配置 API_KEY 时受保护接口返回 503，配置后需携带匹配的 `X-API-Key` 请求头（hmac.compare_digest 防时序攻击），避免服务在未鉴权状态下暴露。/chat 另按调用方凭据做滑动窗口限流（身份取 API Key 哈希，不信任请求体字段）。
 
 ---
 
@@ -673,6 +689,8 @@ docker compose down
 ## 16. 单元测试
 
 共 47 个测试文件、520 个用例（517 passed / 3 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由（含定价指令确定性快路径）、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪（含未归属调用兜底记账）、定价（问价咨询/调价指令分离 + 决策登记）/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
+
+单测之外，项目还维护一套 **88 场景端到端探针**（`scripts/intent_probe.py`，7 阶段 + LLM 评审）作为每次迭代的验收基线：当前基线 88 场景 76 PASS / 通过率 86.4%，LLM 评审均分 4.51/5（Flash 弱模型全程零降级污染）；配套 `scripts/feishu_side_eval.py` / `batch_eval.py` 等评估脚本，探针支持 LLM 预检 fail-fast 与 429 退避以控制评测成本。
 
 ### 共享 Fixture（conftest.py）
 
@@ -776,7 +794,7 @@ GitHub Actions（.github/workflows/ci.yml）：
 | Job | 内容 |
 |-----|------|
 | lint-and-test | flake8 语法检查（E9/F63/F7/F82 阻断）+ pytest 全量测试 |
-| security-scan | bandit 安全扫描（medium 级别以上） |
+| security-scan | bandit 安全扫描（medium 级别以上；当前以 `|| true` 运行，仅报告不阻断构建） |
 
 - Python 3.11，pip 缓存
 - 测试环境变量：mock LLM key + SQLite 测试数据库
@@ -791,7 +809,7 @@ GitHub Actions（.github/workflows/ci.yml）：
 | LLM API Base | LLM_API_BASE / OPENAI_API_BASE | https://dashscope.aliyuncs.com/compatible-mode/v1 | API 地址 |
 | LLM Model | LLM_MODEL_NAME | deepseek-v4-pro | 模型名称 |
 | LLM Temperature | LLM_TEMPERATURE | 0.3 | 生成温度 |
-| LLM Max Tokens | LLM_MAX_TOKENS | 2000 | 最大输出 token |
+| LLM Max Tokens | LLM_MAX_TOKENS | 4096 | 最大输出 token |
 | 本地 Embedding | USE_LOCAL_EMBEDDING | true | 是否使用本地嵌入模型 |
 | 本地模型名 | LOCAL_EMBEDDING_MODEL | paraphrase-multilingual-MiniLM-L12-v2 | HuggingFace 模型 |
 | 远程 Embedding | EMBEDDING_MODEL_NAME | text-embedding-v4 | DashScope 嵌入模型 |
@@ -820,10 +838,15 @@ GitHub Actions（.github/workflows/ci.yml）：
 | 路由缓存 | ROUTER_CACHE_ENABLED | true | temperature=0 路由结果缓存开关（TTL 600s, MAXSIZE 512） |
 | 日志保留天数 | LOG_RETENTION_DAYS | 90 | token/业务任务日志保留期，每日 03:00 定时清理超期记录；<=0 关闭清理 |
 | 回滚登记持久化 | ROLLBACK_PERSISTENCE_ENABLED | true | L4 待确认动作登记落库（pending_actions 表），重启后恢复未确认动作；测试环境自动关闭 |
-| 关键词快速路径 | ROUTER_KEYWORD_FAST_PATH | true | 高置信关键词命中时跳过 LLM（conf>=2 唯一命中触发） |
+| 关键词快速路径 | ROUTER_KEYWORD_FAST_PATH | false | 高置信关键词唯一命中（conf>=2）时跳过 LLM；默认关闭，意图识别以路由 LLM 为准，仅在需要极致响应速度时开启 |
+| 关键词覆盖 LLM | ROUTER_KEYWORD_OVERRIDE | false | 交叉验证：关键词高置信（>=2）时覆盖/补充 LLM 路由结果；默认关闭 |
 | 定价指令快路径 | ROUTER_PRICING_DIRECTIVE_FAST_PATH | true | 明示调价指令（目标价/涨跌幅/折扣）经结构化判别直接路由 pricing_skill，审批门不依赖 LLM 能力；竞品语境/咨询句式/创作素材等歧义输入不触发 |
 | LLM 请求超时 | LLM_REQUEST_TIMEOUT | 45 | 主 LLM 单次请求超时秒数 |
 | LLM 最大重试 | LLM_MAX_RETRIES | 1 | 主 LLM 请求失败重试次数 |
+| 审批超时 | APPROVAL_TIMEOUT | 300 | 审批单有效期（秒），超时未裁决自动放弃并记录日志 |
+| 业务数据目录 | BIZ_DATA_DIR | 自动 | 显式指定业务 CSV 目录；缺省时存在 data_real/ 用真实数据，否则用 data/ 演示数据 |
+| CrossLister 地址 | CROSSLISTER_URL | http://localhost:8080 | Listing 生成微服务地址（CROSSLISTER_TIMEOUT 默认 180s） |
+| 市场哨兵开关 | SENTINEL_ENABLED | true | 是否启动竞品轮询哨兵（轮询间隔/阈值见 SENTINEL_* 变量） |
 
 ---
 
