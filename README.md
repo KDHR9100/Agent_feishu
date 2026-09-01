@@ -617,7 +617,7 @@ docker compose down
 
 ### Dockerfile 特性
 
-- 基础镜像：python:3.11-slim
+- 基础镜像：python:3.13-slim
 - 系统依赖：build-essential、libopenblas-dev（FAISS 需要）
 - 非 root 用户：appuser
 - 健康检查：curl -f http://localhost:8000/health（30s 间隔，60s 启动宽限）
@@ -711,7 +711,7 @@ docker compose down
 | 批量回归与压力（163） | integration(25)、baseline_failure_fixes(31，88 场景基线 12 个失败簇的根因修复回归)、p2_features(19)、code_quality_fixes(15)、batch2(26)、batch3(15)、stress_round1_boundaries(17)、stress_round2_flows(5)、stress_round3_robustness(10) |
 | 端到端流程（37） | tests/integration：regression_flow(11)、plan_execute_flow(8)、rag_decay_flow(7)、memory_flow(4)、mcp_hotplug_flow(4)、token_tracking_flow(3) |
 
-单测之外，项目还维护一套 **88 场景端到端探针**（`scripts/intent_probe.py`，7 阶段 + LLM 评审）作为每次迭代的验收基线：当前基线 88 场景 76 PASS / 通过率 86.4%，LLM 评审均分 4.51/5（Flash 弱模型全程零降级污染）；配套 `scripts/feishu_side_eval.py` / `batch_eval.py` 等评估脚本，探针支持 LLM 预检 fail-fast 与 429 退避以控制评测成本。
+单测之外，项目还维护一套 **88 场景端到端探针**（`scripts/intent_probe.py`，7 阶段 + LLM 评审）作为每次迭代的验收基线：修复前基线 88 场景 76 PASS / 通过率 86.4%，LLM 评审均分 4.51/5（Flash 弱模型全程零降级污染）；确定性修复（12 个失败簇根因归类消化）后，换更弱一代 qwen3.6-flash 跨模型复测 **88 场景 80 PASS / 通过率 90.9%，LLM 评审均分 4.63/5，路由准确率 100%，零降级污染**——确定性修复不依赖模型能力。配套 `scripts/feishu_side_eval.py` / `batch_eval.py` 等评估脚本，探针支持 LLM 预检 fail-fast 与 429 退避以控制评测成本。
 
 ### 共享 Fixture（conftest.py）
 
@@ -740,7 +740,7 @@ GitHub Actions（.github/workflows/ci.yml）：
 | lint-and-test | flake8 语法检查（E9/F63/F7/F82 阻断）+ pytest 全量测试 |
 | security-scan | bandit 安全扫描（medium 级别以上；当前以 `|| true` 运行，仅报告不阻断构建） |
 
-- Python 3.11，pip 缓存
+- Python 3.13，pip 缓存
 - 测试环境变量：mock LLM key + SQLite 测试数据库
 
 ---
