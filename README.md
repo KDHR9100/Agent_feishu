@@ -91,7 +91,7 @@ feishu_tool.reply_message() --- 回复用户
 | 多模态 | VLM | 图片解析为结构化表格（file_analysis_skill） |
 | LLM 容错 | invoke_with_recovery | 上下文超限裁剪重试 + 限流指数退避 + 备用模型自动切换 |
 | 持久记忆 | persistent_memory | 从用户输入提取长期记忆，注入 system prompt 增强个性化 |
-| Hooks | hooks.py | PreToolUse / PostToolUse / UserPromptSubmit 生命周期钩子 |
+| Hooks | hooks.py | UserPromptSubmit / PreToolUse / PostToolUse / Stop 四个生命周期钩子（默认挂审计日志） |
 | 路由加速 | 定价指令确定性快路径 + 结果缓存 | 明示调价指令结构化判别直达 pricing_skill（不经 LLM）；temperature=0 路由结果缓存复用；关键词快速路径默认关闭可选开启 |
 
 ---
@@ -106,7 +106,7 @@ feishu_tool.reply_message() --- 回复用户
 | load_file | 若有文件路径，调用 file_parser_tool 解析文件 |
 | router | 意图识别 + 技能路由，输出 skills_to_execute 列表（支持多技能） |
 | planner | 多技能时生成顺序执行计划 execution_plan（Step JSON，禁止并行 fan-out）；单技能跳过 |
-| skill_executor | 按 execution_plan 顺序执行技能；定价区分问价咨询（只给建议）与调价指令（明示指令走审批门，批准后登记调价决策），高危指令非阻塞挂起 |
+| skill_executor | 按 execution_plan 顺序执行技能；定价区分问价咨询（只给建议）与调价指令（明示指令走审批门，批准后登记调价决策），高危指令非阻塞挂起；执行前先拦截审批进展追问（台账有记录且无新调价指令时直接给确定性状态答复，防止追问被再次路由产生重复审批单） |
 | reflect | ReAct 反思：LLM 判断技能结果是否充分 |
 | answer | 单结果直接提取；多结果调用 LLM 综合生成连贯回答 |
 | save_history | 将用户输入和最终回答写入 LocalMemory |
@@ -127,7 +127,7 @@ user_input, conversation_id, history, tool_result, answer, intent, token_usage, 
 
 ## 3. 路由机制
 
-路由采用四层递进策略，确保高可用。路由入口先做注入检测（用户输入 + 上传文件内容双防线），命中直接拦截：
+路由采用四层递进策略，确保高可用。路由入口先做两道确定性检测，命中直接拦截（零 LLM 消耗）：① Prompt 注入检测（用户输入 + 上传文件内容双防线）；② 路径穿越检测（如"读取 ../../etc/passwd 里的销量数据"直接回确定性拦截文案）：
 
 ### 第一层：文件快捷路由
 
@@ -293,7 +293,7 @@ LLM-as-Judge 评估（app/eval/llm_judge.py）：
 | 类型 | 关键词 | 动作 |
 |------|--------|------|
 | BLOCKED（拦截） | 政治、政府、颠覆、反动、爆炸、杀人、毒品、武器、赌博、诈骗、盗版、黑客 | 拒绝消息 |
-| REDIRECT（重定向） | 看病、医疗、股票、基金 | 引导消息 |
+| REDIRECT（重定向） | 共 22 个：基础 4 个（看病、医疗、股票、基金）+ 医疗用药口语 11 个（吃药、用药、买药、开药、什么药、哪种药、处方、挂号、诊断、偏方、治病）+ 金融投资 7 个（炒股、理财、期货、外汇、比特币、加密货币、荐股） | 引导消息 |
 | ALLOW（放行） | 其他所有输入 | 正常进入 Agent 流程 |
 
 3. **LLM 二次确认**：对嫌疑输入做语义裁决，避免"写降价文案"这类子串误杀。
@@ -308,7 +308,7 @@ LocalMemory 双层存储架构（归档式持久化）：
 | 层 | 实现 | 说明 |
 |----|------|------|
 | 内存层 | OrderedDict + LRU 淘汰 | 超过 1000 个会话时淘汰最久未用的；每会话仅保留 60 条热窗口 |
-| 持久层 | SQLite（SQLAlchemy，WAL 模式） | 表 Conversation，写入时同步，**全量归档永不物理删除**；读取时懒加载最近 60 条（按 id 倒序取最新窗口） |
+| 持久层 | SQLite（SQLAlchemy，WAL 模式） | 表 Conversation，写入时同步，**正常运行链路只做追加归档、不物理删除**（仅存在未被任何生产路径调用的 clear_history 接口）；读取时懒加载最近 60 条（按 id 倒序取最新窗口） |
 
 | 参数 | 值 |
 |------|------|
@@ -361,7 +361,7 @@ LocalMemory 双层存储架构（归档式持久化）：
 | Word (.docx) | python-docx | 逐段落提取文本 |
 
 - 自动提取统计摘要：均值、最大值、最小值、标准差
-- 路径穿越防护：FileTool 拦截 ../../ 等非法路径
+- 路径穿越防护两层：① 用户输入层——路由入口 `detect_path_traversal` 确定性拦截（零 LLM 消耗）；② 文件操作层——FileTool/DocumentManager `_safe_path`（realpath 解析软链 + 目录前缀校验）拦截 ../../ 等非法路径
 
 ---
 
@@ -415,7 +415,7 @@ Agent_feishu/
 │   ├── sentinel/                 # L4 市场哨兵（竞品监控/触发引擎）
 │   │   ├── crawler_base.py       # 爬虫基类（curl_cffi 指纹伪装降级 httpx）
 │   │   ├── trigger_engine.py     # 价格/差评触发引擎
-│   │   └── event_bus.py          # 事件总线（内存/redis 可选）
+│   │   └── event_bus.py          # 事件总线（内存实现，API 语义对齐 Redis Pub/Sub，预留替换）
 │   ├── executor/                 # L4 动作执行层（审批门 + 回滚）
 │   │   ├── action_verifier.py    # 高危动作校验与审批门
 │   │   ├── platform_adapter.py   # 店铺平台适配器（mock/真实）
@@ -462,7 +462,13 @@ Agent_feishu/
 │   └── vectorstore/              # FAISS 索引 + 哈希注册表 + 查询缓存
 ├── tests/                        # 单元测试 + tests/integration 集成流程（详见第 16 节）
 ├── scripts/
-│   └── init_db.py                # 数据库初始化
+│   ├── init_db.py                # 数据库初始化 + 业务种子数据（CSV）
+│   ├── intent_probe.py           # 88 场景端到端探针（7 阶段 + LLM 评审，迭代验收基线）
+│   ├── eval_report.py            # 探针结果一键聚合报告
+│   ├── simulate_feishu.py / batch_eval.py / feishu_side_eval.py  # 模拟与批量评估
+│   ├── import_real_data.py       # 真实业务数据导入
+│   ├── md_to_html.py             # docs/combined 文档 HTML 渲染
+│   └── eval_archive/             # 已归档的早期一次性诊断脚本（探针度量演化的历史留档）
 ├── .github/workflows/
 │   └── ci.yml                    # GitHub Actions CI
 ├── setup.sh                      # 一键安装脚本（Linux / macOS）
@@ -688,7 +694,22 @@ docker compose down
 
 ## 16. 单元测试
 
-共 47 个测试文件、520 个用例（517 passed / 3 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由（含定价指令确定性快路径）、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪（含未归属调用兜底记账）、定价（问价咨询/调价指令分离 + 决策登记）/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。
+共 48 个测试文件、551 个用例（548 passed / 3 skipped，含 tests/integration 6 个端到端流程文件），覆盖路由（含定价指令确定性快路径）、工作流、记忆、安全、工具、调度、热插拔、Plan-Execute、RAG 衰减、Token 追踪（含未归属调用兜底记账）、定价（问价咨询/调价指令分离 + 决策登记）/冲突仲裁/执行器/市场哨兵（L4）、多模态、注入防御、业务度量与限流、压力边界等核心模块。用例数按 `pytest tests/ --collect-only` 实测（2026-08-30）。
+
+按领域分布（括号内为该文件实测收集用例数）：
+
+| 领域 | 测试文件 |
+|------|---------|
+| 路由与意图（56） | router_fallback(14)、router_fallback_edge(21)、cross_validate(8)、router_integration(3)、router_pricing_directive(6)、greeting_intercept(4) |
+| 工作流与规划（23） | workflow(8)、workflow_executable(5)、plan_execute(10) |
+| 定价与 L4（91） | pricing_skill(22)、r2_consultative_pricing(7)、optimizer(15)、conflict_resolver(17)、executor(13)、sentinel(9)、l4_wiring(8) |
+| 审批（15） | approval_gate_skill_aware(8)、approval_status_p6(7) |
+| 技能与多模态（18） | multimodal(12)、ads_skill_robust(3)、rag_list_documents(3) |
+| 记忆（23） | memory(12)、memory_expansion(11) |
+| 安全（16） | guardrails(9)、injection_defense(7) |
+| 工具与基础设施（109） | tools(11)、file_tool(13)、ws_manager(9)、scheduler(8)、mcp_registry(17)、llm_retry(21)、observability(17)、business_metrics(13) |
+| 批量回归与压力（163） | integration(25)、baseline_failure_fixes(31，88 场景基线 12 个失败簇的根因修复回归)、p2_features(19)、code_quality_fixes(15)、batch2(26)、batch3(15)、stress_round1_boundaries(17)、stress_round2_flows(5)、stress_round3_robustness(10) |
+| 端到端流程（37） | tests/integration：regression_flow(11)、plan_execute_flow(8)、rag_decay_flow(7)、memory_flow(4)、mcp_hotplug_flow(4)、token_tracking_flow(3) |
 
 单测之外，项目还维护一套 **88 场景端到端探针**（`scripts/intent_probe.py`，7 阶段 + LLM 评审）作为每次迭代的验收基线：当前基线 88 场景 76 PASS / 通过率 86.4%，LLM 评审均分 4.51/5（Flash 弱模型全程零降级污染）；配套 `scripts/feishu_side_eval.py` / `batch_eval.py` 等评估脚本，探针支持 LLM 预检 fail-fast 与 429 退避以控制评测成本。
 
@@ -696,94 +717,17 @@ docker compose down
 
 | Fixture | 作用域 | 说明 |
 |---------|--------|------|
-| setup_test_database | session, autouse | 创建 product_sales / ads_performance 表 + 种子数据 |
+| setup_test_database | session, autouse | 在临时目录生成 product_sales / ads_performance 测试 CSV 并经 BIZ_DATA_DIR 注入（与生产数据层同构）；同时为系统表（conversations、token_usage_logs 等 ORM 模型）建表。另在测试环境禁用路由缓存与回滚登记持久化，保证用例隔离 |
 | tmp_dir | function | 临时目录，测试后自动清理 |
 | file_tool | function | 沙箱化 FileTool（基于 tmp_dir） |
 
-### test_business_metrics.py — 业务度量与限流器（10 个测试）
+### 测试方法
 
-- TestBusinessMetricsRecord (4): 汇总计数、节省工时仅计成功任务、DAU 与 Top 用户、技能分布
-- TestBusinessMetricsMemoryFallback (2): DB 不可用内存降级、价值报告章节完整性
-- TestRateLimiter (4): 阈值限流、remaining/reset、窗口滑过、环境变量默认值
-
-### test_file_tool.py — 文件工具（13 个测试）
-
-- TestPathTraversal (7): 正常路径允许、../../etc/passwd 读取拦截、路径穿越写入/删除/列目录/追加拦截
-- TestFileOperations (6): 文本/JSON/CSV 格式写入读取、列目录、删除文件、追加内容
-
-### test_guardrails.py — 安全护栏（5 个测试）
-
-空输入允许、正常电商查询允许、危险关键词拦截（"制造爆炸" -> block）、非电商话题重定向（"股票走势" -> redirect）、批量电商查询允许
-
-### test_integration.py — 多模块集成（18 个测试）
-
-- TestFullWorkflowTextMessage (1): Mock LLM 执行完整 agent workflow
-- TestSkillRegistryCompleteness (3): 13 个技能注册完整性、router tools 一致性
-- TestGuardrailsIntegration (4): 安全/危险/离题/空输入批量验证
-- TestMemoryPersistenceIntegration (3): 存取、会话隔离、max_history 裁剪
-- TestRouterToolBinding (2): 13 个 tools 绑定、LLM tool_call 解析
-- TestTicketToolCrudFlow (1): 工单完整生命周期
-- TestKeywordToolAnalysisFlow (4): 已知/未知关键词、热门词、长尾词
-- TestFileParserIntegration (3): CSV 解析、缺失文件、摘要格式
-- TestReflectNodeSufficient (2): reflect 决策、file_skill 跳过
-- TestAnswerNode (2): 单结果提取、多结果 LLM 综合
-
-### test_memory.py — 会话记忆（12 个测试）
-
-- TestLocalMemory (7): 添加获取、最近 N 条、裁剪、清除、空会话、多会话、格式化
-- TestMemoryLRU (4): LRU 淘汰、touch 更新、统计、未达上限不淘汰
-- TestMemoryPersistence (1): 跨实例 SQLite 持久化
-
-### test_router_fallback.py — 路由回退（14 个测试）
-
-- TestKeywordFallback (8): 单/多关键词匹配、多技能竞争、无匹配、全技能覆盖、rag/seo/support 匹配
-- TestRouterFallback (6): LLM 异常/超时/空返回触发 fallback、LLM 正常不回退、无匹配 -> unknown、文件快捷路由
-
-### test_router_fallback_edge.py — 路由边界（21 个测试）
-
-- TestKeywordFallbackEdgeCases (14): 空串、纯空白、纯标点、纯英文、大小写混合、长文本关键词、多类别歧义、平局确定性、全关键词遍历、子串误报、换行符、特殊字符、4 万字符性能 < 0.1s
-- TestRouterEdgeCases (7): LLM 返回 None、并发超时、空输入+LLM 失败、历史不影响 fallback、reflect_feedback 清除、文件快捷优先、多 tool_calls 保留
-
-### test_cross_validate.py — 交叉验证（7 个测试）
-
-- TestKeywordScores (3): 基础评分、单命中、无命中
-- TestCrossValidation (4): LLM 与关键词一致、高置信覆盖、低置信保留、无冲突
-
-### test_router_integration.py — 真实 LLM 集成（3 个测试，需 LM Studio）
-
-- tool calling 能力验证、10 用例路由准确率(>=50%)、fallback 延迟 < 10ms
-- pytest.mark.skipif：服务不可用时自动跳过
-
-### test_scheduler.py — 定时调度（8 个测试）
-
-初始化、启停、4 个注册任务（含每周业务价值报告与日志保留期清理）、状态结构、库存检查安全、日报安全、重复启动幂等、next_run_time
-
-### test_tools.py — 关键词 + 工单工具（11 个测试）
-
-- TestKeywordTool (4): 已知/未知关键词、淘宝热门、未知平台回退
-- TestTicketTool (7): 创建、按订单查、未找到、按手机查、更新状态、无效更新、获取详情
-
-### test_workflow.py — 工作流（6 个测试）
-
-- TestSkillRegistry (3): router tools 注册、预期技能、runner 可调用
-- TestAgentState (2): 必需字段、MAX_RETRIES
-- TestReflectSkipSkills (1): file 和 rag 跳过 reflect
-
-### test_ws_manager.py — WebSocket 管理（9 个测试）
-
-初始化、启动前状态、空凭证不启动、未启动 stop 安全、状态结构、最大重启 5 次、冷却 30 秒、spawn 进程、terminate
-
-### 测试方法总结
-
-| 方法 | 使用文件 |
-|------|---------|
-| unittest.mock (patch/MagicMock) | test_integration, test_router_fallback, test_router_fallback_edge, test_cross_validate, test_scheduler, test_ws_manager |
-| pytest fixture (conftest) | test_file_tool |
-| pytest fixture (autouse) | test_router_integration |
-| setup_method / teardown_method | test_memory, test_tools |
-| tempfile 临时文件/数据库 | test_integration, test_tools, test_memory |
-| pytest.mark.skipif | test_router_integration |
-| 性能/延迟断言 | test_router_fallback_edge (< 0.1s), test_router_integration (< 10ms) |
+- unittest.mock（patch/MagicMock）替换 LLM/外部服务，保证离线可跑与断言确定性
+- pytest fixture（conftest session 级 autouse + 函数级沙箱）
+- pytest.mark.skipif：需真实外部服务（如 LM Studio）的集成用例不可用时自动跳过（3 个 skipped 即此类）
+- 性能/延迟断言：关键词兜底 <10ms、4 万字符路由 <0.1s
+- 端到端流程测试（tests/integration）：热插拔、记忆持久化、Plan-Execute、RAG 时间衰减、Token 追踪、回归链路各一条流程
 
 ---
 
@@ -852,4 +796,4 @@ GitHub Actions（.github/workflows/ci.yml）：
 
 ## 19. License
 
-MIT License
+仓库当前未附 LICENSE 文件，许可条款未正式声明（默认保留所有权利）。如需开源，请先补充许可证文本（如 MIT）再以许可证为准。
