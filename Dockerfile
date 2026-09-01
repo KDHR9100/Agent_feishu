@@ -1,5 +1,5 @@
 # Stage 1: base with system deps
-FROM python:3.11-slim as base
+FROM python:3.13-slim as base
 
 # 安装系统依赖（faiss 需要 openblas，sentence-transformers 需要编译工具）
 RUN apt-get update && apt-get install -y --no-install-recommends \
