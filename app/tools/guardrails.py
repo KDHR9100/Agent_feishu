@@ -4,9 +4,11 @@
 - 关键词命中只作为"嫌疑信号", 由 LLM 二次确认决定最终裁决,
   避免 "爆款/爆单/防诈骗指南" 等业务语境被纯子串匹配误杀。
 - LLM 不可用/超时/解析失败时, 回退到关键词裁决 (fail-safe, 行为与旧版一致)。
+- 业务比喻白名单先行剥离 (杀人价/像股票一样等), 降级模式下不误杀业务黑话。
 - 返回契约不变: {"safe": bool, "action": allow/block/redirect, "message": str|None}
 """
 import logging
+import re
 
 import requests
 
@@ -16,6 +18,24 @@ logger = logging.getLogger("guardrails")
 
 # Sensitive keywords that should be blocked
 BLOCKED_KEYWORDS = ['政治', '政府', '颠覆', '反动', '爆炸', '杀人', '毒品', '武器', '赌博', '诈骗', '盗版', '黑客']
+
+# 电商业务比喻白名单: 高置信口语/比喻句式, 剥离后再做关键词匹配。
+# 动机: LLM 二次确认不可用(降级模式)时, 裸关键词裁决会把 "杀人价"(价格战口语)、
+# "像股票一样有没有行情"(比喻句式) 误判为 block/redirect。剥离后:
+# - 降级模式: 不再误杀业务黑话
+# - 健康模式: 无关键词命中则直接放行, 还省一次 LLM 确认调用
+# 注意: 仅匹配"敏感词作为比喻成分"的固定句式, "我要杀人"这类真实危险请求不受影响。
+_IDIOM_PATTERNS = [
+    re.compile(r"杀人价"),                                    # 价格战口语: "简直是杀人价"
+    re.compile(r"像(股票|基金|看病|医疗|赌博|爆炸|毒品)[^，。？！\n]{0,6}一样"),  # 比喻句式: "像股票一样"
+]
+
+
+def _strip_idioms(text: str) -> str:
+    """剥离业务比喻用语, 避免比喻成分触发关键词误杀"""
+    for pat in _IDIOM_PATTERNS:
+        text = pat.sub("", text)
+    return text
 
 # Topics that should be redirected (not blocked, just guided)
 REDIRECT_KEYWORDS = [
@@ -37,6 +57,26 @@ _REVIEW_SYSTEM_PROMPT = (
     "   商家咨询 \"被职业打假人/恶意投诉/敲诈勒索怎么应对\" 属于电商经营问题, 判 allow)\n"
     "只输出一个单词: allow / block / redirect, 不要输出任何其他内容。"
 )
+
+
+def _record_review_usage(resp_json):
+    """裸 requests 调用不经 LangChain 回调, 手工记账 token 消耗 (失败静默, 不影响裁决)"""
+    try:
+        usage = (resp_json or {}).get("usage") or {}
+        input_tokens = int(usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or 0)
+        if input_tokens <= 0 and output_tokens <= 0:
+            return
+        from app.monitoring import monitoring_stats
+
+        monitoring_stats.record_token_usage(
+            skill_name="guardrails",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            conversation_id="",
+        )
+    except Exception:
+        pass
 
 
 def _llm_review(user_input: str):
@@ -66,7 +106,9 @@ def _llm_review(user_input: str):
             logger.warning(
                 "[Guardrails] LLM review HTTP %s, fallback to keyword verdict", resp.status_code)
             return None
-        content = (resp.json()["choices"][0]["message"]["content"] or "").strip().lower()
+        body = resp.json()
+        _record_review_usage(body)
+        content = (body["choices"][0]["message"]["content"] or "").strip().lower()
         for verdict in ("block", "redirect", "allow"):
             if verdict in content:
                 return verdict
@@ -88,7 +130,7 @@ def check_input(user_input: str) -> dict:
     if not user_input or not user_input.strip():
         return {"safe": True, "action": "allow", "message": None}
 
-    input_lower = user_input.lower()
+    input_lower = _strip_idioms(user_input).lower()
 
     # Check blocked keywords
     hit_keyword, hit_type = None, None

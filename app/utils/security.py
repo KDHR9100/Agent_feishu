@@ -69,6 +69,54 @@ SAFE_BLOCK_RESPONSE = (
     "有什么电商相关的问题我可以帮你解决吗？"
 )
 
+# ── 路径穿越攻击检测 (T28) ──
+# 用户输入中要求读取 ../../etc/passwd 等系统路径属于攻击特征, 不属于正常
+# 电商运营诉求; 命中后在路由入口以确定性文案拦截, 不交给 LLM 发挥。
+PATH_TRAVERSAL_PATTERNS = [
+    r"\.\./",              # Unix 目录上跳: ../../etc/passwd
+    r"\.\.\\",             # Windows 目录上跳: ..\..\windows
+    r"etc/passwd",
+    r"etc/shadow",
+    r"%2e%2e%2f",          # URL 编码变体
+    r"%2e%2e/",
+]
+
+_COMPILED_TRAVERSAL_PATTERNS = []
+for _p in PATH_TRAVERSAL_PATTERNS:
+    try:
+        _COMPILED_TRAVERSAL_PATTERNS.append(
+            (_p, re.compile(_p, re.IGNORECASE)))
+    except re.error as _e:
+        logger.error("[security] invalid traversal regex %s: %s", _p, _e)
+
+SAFE_TRAVERSAL_RESPONSE = (
+    "⛔ 检测到请求中包含路径穿越/非法文件访问特征（如 ../../ 等系统路径），"
+    "该请求已被安全拦截。\n\n"
+    "我是电商运营助手，只能读取你通过飞书上传的业务数据文件。"
+    "如需分析销量/库存数据，请直接上传 CSV/Excel 文件。"
+)
+
+
+def detect_path_traversal(user_input: str) -> bool:
+    """检测输入是否包含路径穿越攻击特征, 命中返回 True (T28)
+
+    与 detect_injection 分开检测: 攻击类别不同, 拦截话术也应不同。
+    正常电商文本几乎不含 "../" 等序列; 价格区间 "99..120" 无斜杠不命中。
+    """
+    if not user_input or not user_input.strip():
+        return False
+    normalized = unicodedata.normalize("NFKC", user_input)
+    normalized = "".join(ch for ch in normalized if ch.isprintable() or ch in "\n\t")
+    input_lower = normalized.lower()
+    for pattern, compiled in _COMPILED_TRAVERSAL_PATTERNS:
+        if compiled.search(input_lower):
+            logger.warning(
+                "[TRAVERSAL DETECTED] matched=%s | input_len=%d | input_preview=%s"
+                % (pattern, len(user_input), user_input[:120])
+            )
+            return True
+    return False
+
 
 def detect_injection(user_input: str) -> bool:
     """

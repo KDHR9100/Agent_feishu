@@ -51,7 +51,7 @@ class TestFullWorkflowTextMessage:
         local_memory.clear_history(cid)
 
 class TestSkillRegistryCompleteness:
-    EXPECTED = ["product_skill", "ads_skill", "content_skill", "help_skill",
+    EXPECTED = ["product_skill", "ads_skill", "help_skill",
                 "file_analysis_skill", "inventory_skill", "competitor_skill",
                 "report_skill", "rag_skill", "seo_skill", "support_skill",
                 "data_analysis_skill"]
@@ -61,7 +61,7 @@ class TestSkillRegistryCompleteness:
         names = [t.name for t in _build_tools()]
         for s in self.EXPECTED:
             assert s in names, f"router missing: {s}"
-        # L4: +pricing_skill 共 13 个
+        # L4: +pricing_skill +listing 共 13 个
         assert len(names) == 13
 
     def test_registry(self):
@@ -69,7 +69,7 @@ class TestSkillRegistryCompleteness:
         for s in self.EXPECTED:
             assert s in SKILL_REGISTRY
             assert callable(SKILL_REGISTRY[s])
-        # L4: +pricing_skill 共 13 个
+        # L4: +pricing_skill +listing 共 13 个
         assert len(SKILL_REGISTRY) == 13
 
     def test_sync(self):
@@ -147,7 +147,7 @@ class TestRouterToolBinding:
         ml = MagicMock()
         ml.bind_tools.return_value = MagicMock()
         ml.bind_tools(tools)
-        # L4: +pricing_skill 共 13 个
+        # L4: +pricing_skill +listing 共 13 个
         assert len(ml.bind_tools.call_args[0][0]) == 13
 
     def test_router_uses_llm(self):

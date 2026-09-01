@@ -40,7 +40,7 @@ class FileParserTool:
 
     def parse_local_file(self, file_path: str) -> Dict[str, Any]:
         if not os.path.exists(file_path):
-            return {'error': f'File not found: {file_path}'}
+            return {'error': f'File not found: {file_path}', 'error_kind': 'not_found'}
         try:
             _, ext = os.path.splitext(file_path)
             ext_lower = ext.lower()
@@ -56,9 +56,15 @@ class FileParserTool:
             elif ext_lower in IMAGE_EXTENSIONS:
                 return self.parse_image(file_path)
             else:
-                return {'error': f'Unsupported file type: {ext}'}
+                return {'error': f'Unsupported file type: {ext}',
+                        'error_kind': 'unsupported'}
             columns = list(df.columns)
             row_count = len(df)
+            # F42a: 解析成功但内容为空 —— 与损坏文件分开归类, 上层据此给出
+            # "文件为空"而非"文件损坏"的确定性话术
+            if row_count == 0 and not columns:
+                return {'error': '文件内容为空（无表头无数据）',
+                        'error_kind': 'empty_file'}
             summary = {}
             for col in columns:
                 if df[col].dtype in ['int64', 'float64']:
@@ -90,8 +96,14 @@ class FileParserTool:
                     '该Excel包含%d个Sheet(%s), 已合并全部Sheet数据, '
                     '首列__sheet__标注各行来源' % (len(sheets_info), ', '.join(sheets_info)))
             return result
+        except pd.errors.EmptyDataError:
+            # F42a: 空文件 (如只有 BOM/换行的 CSV) —— 明确归类, 不冒充解析失败
+            return {'error': '文件内容为空，未读取到任何数据',
+                    'error_kind': 'empty_file'}
         except Exception as e:
-            return {'error': f'Failed to parse file: {str(e)}'}
+            # F45: 损坏/结构不全 —— 与空文件区分, 便于上层给出针对性建议
+            return {'error': f'Failed to parse file: {str(e)}',
+                    'error_kind': 'corrupt_file'}
 
     def parse_image(self, file_path: str) -> Dict[str, Any]:
         """调用 VLM 解析图片, 提取表格数据/关键数值/促销文字"""

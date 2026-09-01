@@ -86,7 +86,9 @@ class TokenTrackingHandler(BaseCallbackHandler):
         try:
             owner, conversation_id = get_context()
             if not owner:
-                return
+                # 兜底归属: 未标记 track_as 的调用路径(闲聊兜底/记忆摘要/
+                # 工具内直调等)不再静默丢弃, 保证记账总量与真实消耗一致
+                owner = "unattributed"
             input_tokens, output_tokens = _extract_token_usage(response)
             if input_tokens <= 0 and output_tokens <= 0:
                 return

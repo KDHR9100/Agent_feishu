@@ -102,7 +102,11 @@ def load_file(state):
         result = file_parser_tool.parse_local_file(file_path)
         if result.get("error"):
             logger.error("[load_file] parse error: %s" % result.get("error"))
-            state["file_content"] = None
+            # F42a/F45: 错误类型以标记串透传给技能(空文件/损坏/不支持),
+            # 技能据此给确定性话术; 不再丢弃 error 让技能凭扩展名猜
+            kind = result.get("error_kind", "corrupt_file")
+            state["file_content"] = "[FILE_PARSE_ERROR:%s] %s" % (
+                kind, result.get("error"))
         else:
             state["file_content"] = file_parser_tool.format_file_summary(
                 result, os.path.basename(file_path)
@@ -243,11 +247,6 @@ def _run_ads_skill(user_input, file_path, file_content, tool_result):
     return ads_skill(user_input)
 
 
-def _run_content_skill(user_input, file_path, file_content, tool_result):
-    from app.skills.content_skill import content_skill
-    return content_skill(user_input)
-
-
 def _run_help_skill(user_input, file_path, file_content, tool_result):
     from app.skills.help_skill import help_skill
     return help_skill(user_input)
@@ -301,6 +300,12 @@ def _run_pricing_skill(user_input, file_path, file_content, tool_result):
     return pricing_skill(user_input)
 
 
+def _run_listing_skill(user_input, file_path, file_content, tool_result):
+    # Listing 生成: 调用外部 CrossLister 微服务, 返回已格式化的文本
+    from app.skills.listing_skill import listing_skill
+    return {"type": "listing", "data": {"response": listing_skill(user_input)}}
+
+
 # L4: 可执行技能集合 — skill_executor 对这些技能产出的 execution_request 走 executor 审批闭环
 EXECUTABLE_SKILLS = {"pricing_skill"}
 
@@ -308,7 +313,6 @@ EXECUTABLE_SKILLS = {"pricing_skill"}
 SKILL_REGISTRY = {
     "product_skill": _run_product_skill,
     "ads_skill": _run_ads_skill,
-    "content_skill": _run_content_skill,
     "help_skill": _run_help_skill,
     "file_analysis_skill": _run_file_analysis_skill,
     "inventory_skill": _run_inventory_skill,
@@ -319,6 +323,7 @@ SKILL_REGISTRY = {
     "support_skill": _run_support_skill,
     "data_analysis_skill": _run_data_analysis_skill,
     "pricing_skill": _run_pricing_skill,
+    "listing": _run_listing_skill,
 }
 
 
@@ -391,7 +396,9 @@ def _run_unknown_skill(state, user_input):
 
     llm_start = time.time()
     try:
-        response = _call_llm(llm, messages)
+        # 归属标签: 闲聊兜底的 LLM 调用计入 "chitchat" (否则会被记账层丢弃)
+        with track_as("chitchat", state.get("conversation_id", "")):
+            response = _call_llm(llm, messages)
         llm_duration = time.time() - llm_start
         monitoring_stats.record_llm_call(llm_duration)
 
@@ -436,29 +443,81 @@ _CONTEXTUAL_MARKS = (
     "第一次", "刚才", "前面", "上文", "之前问", "我问", "你之前", "我们聊",
 )
 
+# 指代词: 输入用代词指代商品且未写明 SKU 时, 注入历史中最近提到的商品 (M14b)
+_PRONOUN_MARKS = ("它", "那个", "该商品", "该 SKU", "这个商品")
+
+# "最早/首个"类追问: 除摘要外额外注入按提及顺序的 SKU 清单 (M15),
+# 让"最开始问的那个SKU"有确定性依据可依, 不靠模型从长摘要里捞
+_FIRST_MENTION_MARKS = ("最一开始", "最开始", "最初", "最早", "第一个", "首个", "第一次")
+
+_SKU_RE = re.compile(r"SKU[\s\-_]?[A-Za-z0-9\-_]+", re.IGNORECASE)
+
+
+def _extract_skus_in_order(*texts):
+    """按提及顺序提取去重后的 SKU 编码 (大小写归一)"""
+    seen = []
+    for text in texts:
+        if not text:
+            continue
+        for m in _SKU_RE.findall(str(text)):
+            code = m.upper().replace(" ", "")
+            if code not in seen:
+                seen.append(code)
+    return seen
+
 
 def _enrich_input_with_history(user_input, state):
     """P10: 用户追问早期对话内容 (如 "我最一开始问的那个SKU是什么") 时,
     把历史摘要/锚定内容前置到技能输入, 避免技能因无上下文而臆测。"""
     if not user_input:
         return user_input
-    if not any(m in user_input for m in _CONTEXTUAL_MARKS):
-        return user_input
-    parts = []
-    summary = state.get("history_summary")
-    if summary:
-        parts.append("[历史对话摘要]\n%s" % summary)
-    if not parts:
-        # 无摘要时退回最近对话的前两条用户消息, 至少保留"开头"信息
+    if any(m in user_input for m in _CONTEXTUAL_MARKS):
+        parts = []
+        summary = state.get("history_summary")
+        if summary:
+            parts.append("[历史对话摘要]\n%s" % summary)
+        if not parts:
+            # 无摘要时退回最近对话的前两条用户消息, 至少保留"开头"信息
+            history = state.get("history") or []
+            first_user = [m.get("content", "") for m in history
+                          if m.get("role") == "user"][:2]
+            if first_user:
+                parts.append("[对话开头用户消息]\n" + "\n".join(first_user))
+        # M15: "最早/首个"类追问 —— 追加确定性的 SKU 提及顺序清单,
+        # 并直接给出解析结论 (M15 复测发现: 仅给清单时弱模型仍会无视,
+        # 必须把"最早是谁"的结论明示出来)
+        if any(m in user_input for m in _FIRST_MENTION_MARKS):
+            history = state.get("history") or []
+            skus = _extract_skus_in_order(
+                state.get("history_summary"),
+                *[m.get("content", "") for m in history if m.get("role") == "user"],
+            )
+            if skus:
+                parts.append(
+                    "[对话中提到的SKU(按提及顺序, 第一个即最早)]: %s"
+                    % " -> ".join(skus)
+                )
+                parts.append(
+                    "[上下文解析结论] 用户追问的\"最开始/最早提到的商品\"就是 **%s**，"
+                    "请围绕该 SKU 回答，不要使用其他 SKU。" % skus[0]
+                )
+        if not parts:
+            return user_input
+        logger.info("[skill_executor] contextual query, injecting history context")
+        return "\n\n".join(parts) + "\n\n[用户当前问题]\n" + user_input
+
+    # M14b: 代词指代最近商品 —— 输入无显式 SKU 且历史中有 SKU 时,
+    # 注入"最近提到的商品", 让技能知道"它/那个"指谁 (M17c 同理兜底)
+    if not _SKU_RE.search(user_input) and any(m in user_input for m in _PRONOUN_MARKS):
         history = state.get("history") or []
-        first_user = [m.get("content", "") for m in history
-                      if m.get("role") == "user"][:2]
-        if first_user:
-            parts.append("[对话开头用户消息]\n" + "\n".join(first_user))
-    if not parts:
-        return user_input
-    logger.info("[skill_executor] contextual query, injecting history context")
-    return "\n\n".join(parts) + "\n\n[用户当前问题]\n" + user_input
+        skus = _extract_skus_in_order(
+            *[m.get("content", "") for m in history if m.get("role") == "user"]
+        )
+        if skus:
+            logger.info("[skill_executor] pronoun input, injecting last mentioned SKU")
+            return ("[对话中最近提到的商品]: %s\n\n[用户当前问题]\n%s"
+                    % (skus[-1], user_input))
+    return user_input
 
 
 def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_result, state):
@@ -481,12 +540,15 @@ def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_
                 )
                 return {"type": "error", "data": "技能 %s 执行出错, 请稍后重试。" % skill_name}
         if isinstance(result, dict) and result.get("is_executable") and result.get("execution_request"):
-            # R2: plan-execute 模式下步骤输入被规划器改写, 咨询信号 ("要不要跟进降价?")
-            # 在技能内部可能丢失; 用原始 user_input 复查 —— 咨询问句只看分析, 不进审批闭环
-            from app.skills.pricing_skill import is_consultative
-            if is_consultative(state.get("user_input", "")):
+            # R2: plan-execute 模式下步骤输入被规划器改写, 意图信号在技能内部可能丢失;
+            # 用原始 user_input 复查"是否存在明示调价指令"(目标价/涨跌幅/折扣)。
+            # 咨询问价("卖多少钱合适/定价建议")与调价执行("降价20%")是两个危险程度
+            # 完全不同的动作: 无明示指令一律不进入审批/执行闭环, 只输出建议。
+            from app.skills.pricing_skill import has_explicit_directive
+            # 以技能实际收到的输入为准复查(顺序模式下即原始用户消息)
+            if not has_explicit_directive(user_input or state.get("user_input", "")):
                 logger.info(
-                    "[skill_executor] consultative query, %s downgraded to analysis-only"
+                    "[skill_executor] no explicit pricing directive, %s downgraded to analysis-only"
                     % skill_name
                 )
                 return {
@@ -568,7 +630,9 @@ def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_
                     "return safe response directly | conversation_id=%s"
                     % state.get("conversation_id", "?")
                 )
-                result = {"type": "chat", "data": SAFE_BLOCK_RESPONSE}
+                # data 由 router 按攻击类别给定 (注入/路径穿越话术不同)
+                result = {"type": "chat",
+                          "data": tool_result.get("data") or SAFE_BLOCK_RESPONSE}
             elif skill_name == "unknown":
                 result = _run_unknown_skill(state, user_input)
             else:
@@ -648,6 +712,32 @@ def skill_executor(state):
         "total_tokens": 0,
     }
     results = []
+
+    # AP33b 修复: 审批进展追问优先走确定性状态答复, 不重跑技能 ——
+    # "刚才那个降价怎么还没执行？" 含高危词, 若照常执行会再次触发定价
+    # 指令、产生重复审批单。台账有记录时直接给状态答复 (零 LLM 消耗)。
+    _fu_input = tool_result.get("user_input", "")
+    if _fu_input and any(m in _fu_input for m in _APPROVAL_FOLLOWUP_MARKS):
+        try:
+            from app.skills.pricing_skill import has_explicit_directive as _has_new_directive
+            _is_new_directive = _has_new_directive(_fu_input)
+        except Exception:
+            _is_new_directive = False
+        if not _is_new_directive:
+            status_answer = _deterministic_approval_answer(state)
+            if status_answer:
+                logger.warning(
+                    "[skill_executor] approval follow-up intercepted, "
+                    "deterministic status answer | conversation_id=%s"
+                    % state.get("conversation_id", "?")
+                )
+                result = {"type": "chat", "data": status_answer,
+                          "skill": "approval_status"}
+                state["skill_results"] = [
+                    {"skill": "approval_status", "result": result}
+                ]
+                state["tool_result"] = result
+                return state
 
     # L4 任务12 旁路仲裁: 用户请求含超过 2 个相互冲突的指标时, 不直接执行技能,
     # 交由冲突仲裁器算帕累托前沿并出决策看板供用户点选 (最终权衡交给人类)。
@@ -953,8 +1043,13 @@ def _extract_text_from_result(result_obj):
             data.get("analysis")
             or data.get("copy")
             or data.get("response")
+            # report_skill 的文本在 summary 字段, 缺失此项会退化为 dict repr 原样输出
+            or data.get("summary")
             or str(data)
         )
+        # 报告文件生成成功时附上路径, 方便用户取阅
+        if data.get("summary") and data.get("report_file"):
+            text = "%s\n\n📄 报告文件：%s" % (data["summary"], data["report_file"])
     elif isinstance(data, str):
         text = data
     else:
@@ -991,21 +1086,29 @@ def _deterministic_approval_answer(state) -> str:
         return ""
     try:
         from app.utils.approval import approval_manager
-        items = approval_manager.recent_approvals(state.get("conversation_id", ""), limit=1)
+        items = approval_manager.recent_approvals(state.get("conversation_id", ""), limit=3)
     except Exception:
         return ""
     if not items:
         return ""
-    e = items[0]
-    desc = (e.get("description") or e.get("action_name") or "该操作")[:60]
-    if e.get("executed"):
-        return "您刚才的操作「%s」已批准并执行完成。" % desc
-    status = e.get("status")
-    if status == "rejected":
-        return ("您刚才的操作「%s」已被拒绝，未执行。"
-                "如需继续，可调整方案后重新发起请求。" % desc)
-    if status == "approved":
-        return "您刚才的操作「%s」已批准，正在等待执行。" % desc
+    # AP33b 修复: 扫描最近多条记录按确定性优先级取裁决,
+    # 避免 pending 态(如重复审批单/挂起单)遮蔽已产生的拒绝/执行结论
+    pending_desc = None
+    for e in items:
+        desc = (e.get("description") or e.get("action_name") or "该操作")[:60]
+        if e.get("executed"):
+            return "您刚才的操作「%s」已批准并执行完成。" % desc
+        status = e.get("status")
+        if status == "rejected":
+            return ("您刚才的操作「%s」已被拒绝，未执行。"
+                    "如需继续，可调整方案后重新发起请求。" % desc)
+        if status == "approved":
+            return "您刚才的操作「%s」已批准，正在等待执行。" % desc
+        if pending_desc is None and status == "pending":
+            pending_desc = desc
+    if pending_desc:
+        return ("您刚才的操作「%s」仍在等待审批：请在飞书审批卡片上点击【批准】或【拒绝】；"
+                "5 分钟内无人处理将自动放弃并记录日志。" % pending_desc)
     return ""
 
 

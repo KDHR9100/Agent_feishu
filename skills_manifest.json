@@ -33,19 +33,6 @@
       "function": "ads_skill"
     },
     {
-      "name": "content_skill",
-      "description": "生成营销文案、商品描述、推广内容等",
-      "keywords": [
-        "文案",
-        "活动策划",
-        "营销",
-        "推广文案",
-        "写一段"
-      ],
-      "module": "app.skills.content_skill",
-      "function": "content_skill"
-    },
-    {
       "name": "inventory_skill",
       "description": "分析库存数据、库存预警、补货建议等",
       "keywords": [
@@ -131,13 +118,17 @@
     },
     {
       "name": "data_analysis_skill",
-      "description": "跨领域深度数据分析、异常检测、同环比统计。仅当需要跨多个领域的综合统计分析时使用；单一商品/广告/库存的日常分析请用对应领域技能，不要用本技能。",
+      "description": "跨领域深度数据分析、异常检测、同环比统计。用户询问某时段有什么数据/数据概况，或需要跨多个领域的综合统计分析时使用；单一商品/广告/库存的日常分析请用对应领域技能，不要用本技能。",
       "keywords": [
         "趋势",
         "异常",
         "同比",
         "环比",
-        "统计"
+        "统计",
+        "有什么数据",
+        "有哪些数据",
+        "数据概况",
+        "查一下数据"
       ],
       "module": "app.skills.data_analysis_skill",
       "function": "data_analysis_skill"
@@ -165,6 +156,21 @@
       ],
       "module": "app.skills.help_skill",
       "function": "help_skill"
+    },
+    {
+      "name": "listing",
+      "description": "基于商品图片生成多语言合规 Listing（标题、五点描述、商品描述、后台关键词）",
+      "keywords": [
+        "listing",
+        "标题",
+        "描述",
+        "商品详情",
+        "重新生成",
+        "图片生成"
+      ],
+      "skill_func": "app.skills.listing_skill.listing_skill",
+      "module": "app.skills.listing_skill",
+      "function": "listing_skill"
     },
     {
       "name": "pricing_skill",

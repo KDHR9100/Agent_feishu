@@ -11,6 +11,8 @@ def extract_sku_from_input(user_input: str) -> Optional[str]:
     # 捕获完整 SKU 词元 (含 "SKU" 前缀), 如 SKU001 / SKU-A001 / SKU-XXXX
     patterns = [
         r"(SKU[-_]?[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*)",
+        # 兼容 "SKU HY00000637" / "SKU: HY00000637" 空格/冒号分隔写法, 返回编码本身
+        r"SKU[\s:：]+([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*)",
     ]
     for pattern in patterns:
         match = re.search(pattern, user_input, re.IGNORECASE)
@@ -74,16 +76,16 @@ def product_skill(user_input: str):
     honesty_note = ""
     try:
         if extracted_sku:
-            db_data = db_tool.get_product_sales(sku=extracted_sku, days=30)
+            db_data = db_tool.get_product_sales(sku=extracted_sku, days=180)
             if not db_data or (isinstance(db_data, list) and len(db_data) == 0):
                 requested_sku_missing = True
                 honesty_note = (
                     "用户指定的 SKU【%s】在数据库中没有任何销售记录。"
                     "下方 database_data 是全店其他商品的参考数据, 不是该 SKU 的数据。" % extracted_sku
                 )
-                db_data = db_tool.get_product_sales(days=7)
+                db_data = db_tool.get_product_sales(days=180)
         else:
-            db_data = db_tool.get_product_sales(days=7)
+            db_data = db_tool.get_product_sales(days=180)
 
         all_products = db_tool.get_all_products()
         categories = db_tool.get_product_categories()

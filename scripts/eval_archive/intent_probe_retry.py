@@ -95,18 +95,17 @@ try:
 except Exception as e:
     record({"sid": "O66br", "phase": "chat-retry", "passed": False, "reason": str(e)[:150]})
 
-# ---------- 5. C52r: 3并发不同会话 (上轮429) ----------
+# ---------- 5. C52r: 2并发不同会话 (上轮429) ----------
 def _one(i):
     msgs = [("哪些商品库存低于预警线了？", "inventory_skill"),
-            ("昨天广告ROI怎么样？", "ads_skill"),
-            ("写一段小红书种草文案，主推夏季新品连衣裙", "content_skill")]
+            ("昨天广告ROI怎么样？", "ads_skill")]
     m, exp = msgs[i]
     return chat_case("C52r%d" % (i + 1), m, "并发下路由不串线: %s" % exp,
                      conv="probe_c52r%d_%s" % (i, RUN_ID), expect=[exp])
 
 try:
-    with concurrent.futures.ThreadPoolExecutor(3) as ex:
-        list(ex.map(_one, range(3)))
+    with concurrent.futures.ThreadPoolExecutor(2) as ex:
+        list(ex.map(_one, range(2)))
 except Exception as e:
     record({"sid": "C52r", "phase": "rl-retry", "passed": False, "reason": str(e)[:150]})
 

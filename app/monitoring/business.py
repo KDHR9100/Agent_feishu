@@ -22,7 +22,6 @@ MANUAL_TIME_MINUTES = {
     "product_skill": 15,       # 商品销售数据分析
     "ads_skill": 15,           # 广告效果分析
     "inventory_skill": 10,     # 库存盘点与预警
-    "content_skill": 20,       # 营销文案撰写
     "report_skill": 30,        # 运营报告撰写
     "competitor_skill": 30,    # 竞品情报收集
     "data_analysis_skill": 25,  # 深度数据分析

@@ -115,16 +115,16 @@ def test_mock_store_concurrent_price_updates_no_crash():
         assert store.get_price("item_%d" % n) == pytest.approx(109.0)
 
 
-# ---------- 回归: 12 老技能注册机制未被破坏 ----------
+# ---------- 回归: 老技能注册机制未被破坏 ----------
 LEGACY_SKILLS = [
-    "product_skill", "ads_skill", "content_skill", "help_skill",
+    "product_skill", "ads_skill", "help_skill",
     "file_analysis_skill", "inventory_skill", "competitor_skill",
     "report_skill", "rag_skill", "seo_skill", "support_skill",
     "data_analysis_skill",
 ]
 
 
-def test_legacy_12_skills_registry_intact():
+def test_legacy_skills_registry_intact():
     for s in LEGACY_SKILLS:
         assert s in SKILL_REGISTRY and callable(SKILL_REGISTRY[s])
     assert "pricing_skill" in SKILL_REGISTRY  # 新增技能并列挂载
@@ -186,9 +186,11 @@ def test_checkpoint2_endpoint_json_shape():
     assert body["confidence_interval"]["level"] == "95%"
 
 
-def test_checkpoint3_approval_gate_then_mock(capsys):
+def test_checkpoint3_approval_gate_then_register(capsys):
     from app.agent.workflow import _execute_single_skill
     from app.utils.approval import approval_manager
+    from app.executor.action_verifier import get_action_verifier
+    price_before = get_action_verifier().store.get_price("default_hot_item")
     result = _execute_single_skill(
         "pricing_skill", "帮我把爆款涨价 10%（当前售价 99，竞品均价 105）",
         None, None, {}, {"conversation_id": "conv-r3"})
@@ -198,4 +200,6 @@ def test_checkpoint3_approval_gate_then_mock(capsys):
     receipt = approval_manager.take_and_execute(aid)
     assert receipt["success"] is True
     out = capsys.readouterr().out
-    assert "Mock 执行成功" in out
+    assert "调价决策已登记" in out
+    # 决策登记语义: 店铺价格不动
+    assert get_action_verifier().store.get_price("default_hot_item") == price_before

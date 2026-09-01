@@ -65,6 +65,9 @@ app.log
 # Private data files (keep directory structure, exclude content)
 data/uploads/*
 !data/uploads/.gitkeep
+# 真实业务原始数据(含经营信息, 严禁提交)
+data/raw/
+data_real/
 data/vectorstore/faiss_index/
 data/vectorstore/doc_hashes.json
 data/vectorstore/query_cache.json
@@ -122,3 +125,9 @@ test_report_*.md
 # Misnamed scripts accidentally created at repo root (含反斜杠路径的误创建文件)
 [Cc]:[\]temp[\]*.py
 *setup_batch*.py
+
+# Rotated application logs
+app.log.*
+
+# Session tooling
+.zcode/

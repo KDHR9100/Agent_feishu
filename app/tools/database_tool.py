@@ -1,18 +1,42 @@
 import csv
+import logging
 import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-# 项目根目录下的 data/ 作为默认数据目录
-_DEFAULT_DATA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "data",
+# 项目根目录下的 data/ 作为演示数据目录
+_PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
+_DEFAULT_DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
+
+logger = logging.getLogger("database_tool")
+
+# data_real 存在与否的探测结果缓存 (避免每次读数据都探测/刷日志)
+_detected_dir: Optional[str] = None
 
 
 def _resolve_data_dir() -> str:
-    return os.environ.get("BIZ_DATA_DIR", _DEFAULT_DATA_DIR)
+    """数据目录解析优先级:
+    1. 环境变量 BIZ_DATA_DIR (显式指定, 永远最高优先级)
+    2. 本地存在 data_real/ 目录 -> 自动使用真实业务数据
+       (data_real 已加入 .gitignore, 他人 clone 仓库时不存在, 自动回退演示数据)
+    3. data/ 演示数据
+    """
+    global _detected_dir
+    env_dir = os.environ.get("BIZ_DATA_DIR")
+    if env_dir:
+        return env_dir
+    if _detected_dir is None:
+        real_dir = os.path.join(_PROJECT_ROOT, "data_real")
+        if os.path.isdir(real_dir):
+            _detected_dir = real_dir
+            logger.info("[db] 检测到 data_real/, 自动使用真实业务数据")
+        else:
+            _detected_dir = _DEFAULT_DATA_DIR
+            logger.info("[db] 未检测到 data_real/, 使用演示数据")
+    return _detected_dir
 
 
 def _cast_row(row: Dict[str, str]) -> Dict[str, Any]:

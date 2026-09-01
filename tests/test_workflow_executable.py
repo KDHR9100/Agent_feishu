@@ -17,8 +17,8 @@ def test_high_risk_keywords_cover_price_up_and_coupons():
         assert kw in HIGH_RISK_KEYWORDS
 
 
-def test_executable_flow_approval_then_mock_execute(capsys):
-    """Checkpoint 3 链路: 请求 -> 审批卡片(approval_required) -> 批准 -> Mock 执行成功"""
+def test_executable_flow_approval_then_decision_registered(capsys):
+    """Checkpoint 3 链路: 请求 -> 审批卡片(approval_required) -> 批准 -> 登记调价决策"""
     verifier = av_mod.get_action_verifier()
     verifier.store._prices["default_hot_item"] = 99.0  # 重置 Mock 店铺价格
 
@@ -43,14 +43,16 @@ def test_executable_flow_approval_then_mock_execute(capsys):
     receipt = approval_manager.take_and_execute(aid)
     assert receipt is not None
     assert receipt["success"] is True
-    # 3) Mock 店铺价格已按沙盒最优方案调整
-    assert verifier.store.get_price("default_hot_item") == receipt["new_price"]
+    # 3) 决策登记语义: 店铺价格不动, 回执含登记信息与手动执行引导
+    assert verifier.store.get_price("default_hot_item") == 99.0
+    assert receipt["post_status"] == "registered"
+    assert receipt["new_price"] == 108.9  # 99 * 1.10, 与审批卡片展示的口径一致
+    assert "调价决策已登记" in receipt["message"]
+    assert "商家后台" in receipt["manual_guide"]
     out = capsys.readouterr().out
-    assert "模拟修改价格成功" in out
-    assert "Mock 执行成功" in out
-    # 4) 回滚窗口已登记
-    assert receipt.get("action_id")
-    assert verifier.rollback.get(receipt["action_id"])["status"] == "awaiting_confirmation"
+    assert "调价决策已登记" in out
+    # 4) 无回滚窗口 (没有真实执行, 无需回滚)
+    assert receipt.get("action_id") is None
 
 
 def test_executable_flow_reject_keeps_price(capsys):
@@ -58,9 +60,24 @@ def test_executable_flow_reject_keeps_price(capsys):
     verifier.store._prices["default_hot_item"] = 99.0
     state = {"conversation_id": "conv-reject"}
     result = _execute_single_skill(
-        "pricing_skill", "帮我定价，当前售价 99，竞品均价 105", None, None, {}, state)
+        "pricing_skill", "帮我把爆款价格降到 79.2 元（当前售价 99，竞品均价 105）",
+        None, None, {}, state)
     assert result["type"] == "approval_required"
     aid = result["data"]["approval_id"]
     approval_manager.resolve(aid, False)
     assert approval_manager.take_and_execute(aid) is None
+    assert verifier.store.get_price("default_hot_item") == 99.0
+
+
+def test_consultative_pricing_never_creates_approval():
+    """问价咨询(卖多少合适)与调价执行是两回事: 咨询绝不产生审批单"""
+    verifier = av_mod.get_action_verifier()
+    verifier.store._prices["default_hot_item"] = 99.0
+    state = {"conversation_id": "conv-consult"}
+    result = _execute_single_skill(
+        "pricing_skill", "帮我定价，当前售价 99，竞品均价 105", None, None, {}, state)
+    # 咨询问句 → 纯分析, 不进审批链路
+    assert result["type"] == "analysis"
+    assert result.get("is_executable") is False
+    assert "approval_id" not in result.get("data", {})
     assert verifier.store.get_price("default_hot_item") == 99.0

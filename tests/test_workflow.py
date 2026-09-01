@@ -15,7 +15,7 @@ class TestSkillRegistry:
 
     def test_registry_has_expected_skills(self):
         from app.agent.workflow import SKILL_REGISTRY
-        expected = {"product_skill", "ads_skill", "content_skill", "help_skill",
+        expected = {"product_skill", "ads_skill", "help_skill",
                     "file_analysis_skill", "inventory_skill", "competitor_skill",
                     "report_skill", "rag_skill"}
         for skill in expected:
@@ -57,3 +57,33 @@ class TestReflectSkipSkills:
                   "retry_count": 0, "user_input": "平台佣金规则"}
         result2 = reflect(state2)
         assert result2["reflect_decision"] == "sufficient"
+
+
+class TestExtractTextFromResult:
+    def test_report_skill_summary_extracted_not_dict_repr(self):
+        """B4 回归: report_skill 无数据分支的 summary 必须以自然语言输出,
+        不能退化为 {'summary': ..., 'success': False} 的 dict repr"""
+        from app.agent.workflow import _extract_text_from_result
+        result = {
+            "type": "report_generation",
+            "data": {
+                "summary": "抱歉，本周暂无可用于生成运营报告的数据。",
+                "report_file": "",
+                "success": False,
+                "no_data": True,
+            },
+        }
+        text = _extract_text_from_result(result)
+        assert text == "抱歉，本周暂无可用于生成运营报告的数据。"
+        assert "{" not in text and "success" not in text
+
+    def test_report_skill_with_file_appends_path(self):
+        from app.agent.workflow import _extract_text_from_result
+        result = {
+            "type": "report_generation",
+            "data": {"summary": "报告摘要", "report_file": "reports/report_x.md",
+                     "success": True},
+        }
+        text = _extract_text_from_result(result)
+        assert text.startswith("报告摘要")
+        assert "reports/report_x.md" in text

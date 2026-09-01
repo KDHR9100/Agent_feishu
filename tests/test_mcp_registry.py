@@ -19,7 +19,7 @@ class TestSkillsManifest:
         with open(manifest_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         assert "skills" in data
-        # L4: 新增 pricing_skill 后共 13 个技能
+        # 删除 content_skill 后共 13 个技能
         assert len(data["skills"]) == 13
 
     def test_all_skills_have_required_fields(self):
@@ -61,6 +61,7 @@ class TestSkillRegistry:
         assert "product_skill" in rules
         assert "广告" in rules["ads_skill"]
         assert "库存" in rules["inventory_skill"]
+        assert "listing" in rules
 
     def test_get_skill_by_name(self):
         from app.mcp_server.registry import SkillRegistry
@@ -82,6 +83,7 @@ class TestSkillRegistry:
         assert len(names) == 13
         assert "data_analysis_skill" in names
         assert "pricing_skill" in names
+        assert "listing" in names
 
     def test_register_skill_runtime(self):
         from app.mcp_server.registry import SkillRegistry
@@ -121,7 +123,7 @@ class TestRouterDynamicLoading:
 
     def test_router_tools_count(self):
         from app.agent.router import _build_tools
-        # L4: +pricing_skill 共 13 个
+        # 删除 content_skill 后共 13 个
         assert len(_build_tools()) == 13
 
     def test_router_keyword_fallback(self):

@@ -41,6 +41,29 @@ def file_analysis_skill(
     """
     文件解析技能：接收文件路径和已解析的内容，生成结构化分析报告
     """
+    # F42a/F45: 解析器错误类型透传 —— 空文件/损坏/不支持的确定性话术,
+    # 边界场景不交给 LLM 发挥 (内容可能被 wrap_untrusted 包裹, 用包含匹配)
+    if file_content and "[FILE_PARSE_ERROR:" in file_content:
+        kind = file_content.split("[FILE_PARSE_ERROR:", 1)[1].split("]", 1)[0]
+        name = os.path.basename(file_path) if file_path else "文件"
+        if kind == "empty_file":
+            data = (
+                "⚠️ 文件「%s」内容为空：未读取到任何表头或数据行。\n"
+                "【建议】请确认文件内确实有数据后重新上传；"
+                "若为空模板，请先填充数据再上传。" % name
+            )
+        elif kind == "unsupported":
+            data = (
+                "⚠️ 文件「%s」格式不受支持。目前支持 CSV / Excel / PDF / Word / 图片。\n"
+                "【建议】请转换格式后重新上传。" % name
+            )
+        else:
+            data = (
+                "⚠️ 文件「%s」解析失败：文件可能已损坏、加密或格式异常。\n"
+                "【建议】请重新导出（建议另存为 CSV/Excel）后再次上传。" % name
+            )
+        return {"type": "file_analysis", "data": data}
+
     if not file_content:
         return {
             "type": "file_analysis",

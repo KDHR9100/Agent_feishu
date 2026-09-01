@@ -31,7 +31,10 @@ GREETING_KEYWORDS = [
     "你会干嘛", "能干什么", "能干啥", "会干什么", "做什么的",
     "干什么的", "是干嘛的", "功能介绍", "功能有哪些", "有些什么功能",
 ]
-GREETING_LLM_CARD = True  # 标记: LLM 路径问候也回介绍卡片
+# 关闭 LLM 路径的问候卡片兜底: "help_skill+短文本即回卡片"会误伤短数据提问,
+# 如"5月有什么数据?"被路由LLM误判为 help_skill 后直接弹欢迎卡片、技能不执行。
+# 真正的问候语由上方 _is_greeting 正则拦截负责回卡片。
+GREETING_LLM_CARD = False
 
 
 def _is_greeting(text: str) -> bool:
@@ -60,8 +63,8 @@ def _build_greeting_card() -> str:
                 "text": {
                     "tag": "lark_md",
                     "content": (
-                        "我是你的 **AI 电商运营助手**，基于 LangGraph + DeepSeek 构建。"
-                        "我可以帮你处理以下工作："
+                        "我是你的 **AI 电商运营助手**，专注 TikTok Shop 店铺经营，"
+                        "基于 LangGraph 多技能编排架构构建。我可以帮你处理以下工作："
                     ),
                 },
             },
@@ -73,9 +76,23 @@ def _build_greeting_card() -> str:
                     "content": (
                         "\U0001f4ca **数据分析类**\n"
                         "\u2022 商品销售分析 \u2014 \u201c分析商品销量\u201d\n"
-                        "\u2022 广告效果分析 \u2014 \u201c广告ROI是多少\u201d\n"
+                        "\u2022 广告效果分析 \u2014 \u201c4月广告数据如何\u201d\n"
                         "\u2022 库存预警查询 \u2014 \u201c库存预警\u201d\n"
-                        "\u2022 数据趋势/异常 \u2014 \u201c转化率趋势\u201d"
+                        "\u2022 深度数据分析 \u2014 \u201c5月有什么数据\u201d\n"
+                        "\u2022 知识库检索 \u2014 \u201c佣金规则是什么/平台政策怎么规定\u201d"
+                    ),
+                },
+            },
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "\U0001f4b0 **经营决策类**\n"
+                        "\u2022 定价优化 \u2014 \u201c这个SKU卖多少钱合适\u201d（蒙特卡洛模拟）\n"
+                        "\u2022 调价执行 \u2014 \u201c把这个SKU降价20%\u201d\n"
+                        "\u2022 🔒 安全承诺：问价只给建议；真要调价会先弹审批卡片，"
+                        "**你点确认后才会执行**，随时可拒绝。"
                     ),
                 },
             },
@@ -85,9 +102,8 @@ def _build_greeting_card() -> str:
                     "tag": "lark_md",
                     "content": (
                         "\u270d\ufe0f **内容生成类**\n"
-                        "\u2022 营销文案撰写 \u2014 \u201c写一段小红书文案\u201d\n"
-                        "\u2022 SEO 标题优化 \u2014 \u201c优化商品标题SEO\u201d\n"
-                        "\u2022 竞品情报分析 \u2014 \u201c分析竞品动态\u201d"
+                        "\u2022 Listing 生成 \u2014 \u201c帮我重新生成这个商品的listing\u201d\n"
+                        "（商品图片 \u2192 多语言合规标题/五点描述/商品描述）"
                     ),
                 },
             },
@@ -98,8 +114,7 @@ def _build_greeting_card() -> str:
                     "content": (
                         "\U0001f4c1 **文件与报告类**\n"
                         "\u2022 上传文件解析 \u2014 直接发 xlsx/csv/pdf/图片\n"
-                        "\u2022 运营报告生成 \u2014 \u201c生成本周运营报告\u201d\n"
-                        "\u2022 客服/售后处理 \u2014 \u201c查询订单状态\u201d"
+                        "\u2022 运营报告生成 \u2014 \u201c生成本周运营报告\u201d"
                     ),
                 },
             },
@@ -151,14 +166,14 @@ def _build_approval_card(info: dict) -> str:
                     "content": "**关联技能**：%s\n**审批单号**：%s" % (skill, approval_id),
                 },
             },
-            {"tag": "note", "elements": [{"tag": "plain_text", "content": "点击按钮后 Agent 才会执行/放弃该操作"}]},
+            {"tag": "note", "elements": [{"tag": "plain_text", "content": "点击按钮后 Agent 才会处理/放弃该操作"}]},
             {"tag": "hr"},
             {
                 "tag": "action",
                 "actions": [
                     {
                         "tag": "button",
-                        "text": {"tag": "plain_text", "content": "\u2705 批准并执行"},
+                        "text": {"tag": "plain_text", "content": "\u2705 批准"},
                         "type": "danger",
                         "value": {"approval_id": approval_id, "action": "approve"},
                     },
@@ -177,7 +192,7 @@ def _build_approval_card(info: dict) -> str:
 
 def _build_approval_resolved_card(approval_id, skill, desc, approved):
     """构建审批结果卡片 (回调响应中用于更新原卡片, 1.0 JSON)"""
-    status = "\u2705 已批准，操作已执行" if approved else "\u274c 已拒绝，操作未执行"
+    status = "\u2705 已批准，操作已处理" if approved else "\u274c 已拒绝，操作未执行"
     return {
         "config": {"wide_screen_mode": True, "update_multi": True},
         "header": {
@@ -209,6 +224,7 @@ from app.tools.feishu_tool import feishu_tool
 from app.tools.file_parser_tool import file_parser_tool
 from app.tools.guardrails import check_input
 from app.agent.workflow import agent
+from app.utils import md_render
 
 # 消息队列
 message_queue = queue.Queue()
@@ -490,18 +506,19 @@ def _handle_single_message(msg):
                 # 流式执行: 分阶段推送进度消息
                 # 技能名中文映射（运营人员可读）
                 _SKILL_CN = {
-                    "inventory_skill": "库存管理",
-                    "ads_skill": "广告分析",
+                    "inventory_skill": "库存管理", "ads_skill": "广告分析",
                     "product_skill": "商品管理",
-                    "content_skill": "内容创作",
-                    "seo_skill": "SEO优化",
-                    "competitor_skill": "竞品分析",
+                    "seo_skill": "SEO优化", "competitor_skill": "竞品分析",
                     "trend_skill": "趋势分析",
                     "report_skill": "报告生成",
                     "support_skill": "客服助手",
                     "file_analysis_skill": "文件解析",
                     "help_skill": "帮助中心",
                     "order_skill": "订单管理",
+                    "data_analysis_skill": "深度数据分析",
+                    "pricing_skill": "定价优化",
+                    "rag_skill": "知识库检索",
+                    "listing": "Listing生成",
                 }
                 _cached_skills = []
                 result = None
@@ -515,15 +532,20 @@ def _handle_single_message(msg):
                                 # 正则外的问候/能力询问: LLM 选中 help_skill 且为短文本
                                 # -> 与正则拦截一致, 直接回自我介绍卡片, 不再跑技能出文本
                                 if GREETING_LLM_CARD and skills == ["help_skill"] \
-                                        and len((msg["content"] or "").strip()) <= 20:
+                                        and len((msg["content"] or "").strip()) <= 20 \
+                                        and _is_greeting(msg["content"] or ""):
                                     logger.info("[%s] greeting via LLM route, sending card", track_id)
                                     feishu_tool.reply_message(
                                         msg["message_id"], _build_greeting_card(),
                                         msg_type="interactive")
                                     return
                                 _raw = skills[0] if skills else ""
-                                skill_label = _SKILL_CN.get(_raw, _raw) if _raw else "处理"
-                                _safe_reply(msg["message_id"], "\U0001f4ad 思考：已识别意图，将调用 [%s]" % skill_label)
+                                if _raw == "unknown" or not _raw:
+                                    # 未匹配到专项技能, 走通用对话兜底, 如实告知用户
+                                    _safe_reply(msg["message_id"], "\U0001f4ad 思考：未匹配到专项技能，将直接对话回答")
+                                else:
+                                    skill_label = _SKILL_CN.get(_raw, _raw)
+                                    _safe_reply(msg["message_id"], "\U0001f4ad 思考：已识别意图，将调用 [%s]" % skill_label)
                             # planner 完成: 多步计划时推送执行计划思考
                             elif node_name == "planner":
                                 plan = node_state.get("execution_plan")
@@ -589,9 +611,21 @@ def _handle_single_message(msg):
             logger.warning("[Feishu WS] [%s] business metrics record failed: %s", track_id, _biz_err)
 
         # ---------- 回复消息 ----------
+        # 含 Markdown 结构的答案转成飞书卡片渲染 (标题/列表/表格),
+        # 纯文本短回复保持 text 消息; 卡片发送失败则降级为剥离符号的纯文本
         try:
-            feishu_tool.reply_message(msg["message_id"], answer)
-            logger.info("[Feishu WS] [%s] Reply sent, answer:\n%s", track_id, answer)
+            if md_render.has_markdown(answer):
+                card_json = md_render.build_answer_card(answer)
+                res = feishu_tool.reply_message(msg["message_id"], card_json, msg_type="interactive")
+                if res.get("code") == 0:
+                    logger.info("[Feishu WS] [%s] Reply sent as card, answer:\n%s", track_id, answer)
+                else:
+                    logger.warning("[Feishu WS] [%s] card reply failed (%s), fallback to plain text",
+                                   track_id, res.get("msg") or res.get("error"))
+                    feishu_tool.reply_message(msg["message_id"], md_render.strip_markdown(answer))
+            else:
+                feishu_tool.reply_message(msg["message_id"], answer)
+                logger.info("[Feishu WS] [%s] Reply sent, answer:\n%s", track_id, answer)
         except Exception as e:
             logger.error("[Feishu WS] [%s] Reply failed: %s", track_id, str(e))
 
@@ -688,7 +722,7 @@ def do_p2_card_action_trigger(data):
             threading.Thread(
                 target=_run_approved_async, args=(approval_id,), daemon=True
             ).start()
-            toast = {"type": "success", "content": "已批准，正在执行操作..."}
+            toast = {"type": "success", "content": "已批准，正在处理操作..."}
             card_data = _build_approval_resolved_card(approval_id, skill, desc, True)
         elif act == "reject":
             approval_manager.resolve(approval_id, False)

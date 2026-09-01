@@ -97,16 +97,16 @@ class TestPlanExecuteFlow:
         state = {
             "execution_plan": [
                 {"skill": "seo_skill", "args": {"user_input": "step1"}},
-                {"skill": "content_skill", "args": {"user_input": "step2"}},
+                {"skill": "ads_skill", "args": {"user_input": "step2"}},
                 {"skill": "report_skill", "args": {"user_input": "step3"}},
             ],
             "tool_result": {},
-            "skills_to_execute": ["seo_skill", "content_skill", "report_skill"],
+            "skills_to_execute": ["seo_skill", "ads_skill", "report_skill"],
             "conversation_id": "test-order",
         }
         skill_executor(state)
 
-        assert execution_order == ["seo_skill", "content_skill", "report_skill"]
+        assert execution_order == ["seo_skill", "ads_skill", "report_skill"]
 
     @patch("app.agent.workflow._execute_single_skill")
     def test_no_plan_falls_back_to_list_mode(self, mock_exec):

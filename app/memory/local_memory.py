@@ -228,6 +228,7 @@ class LocalMemory:
 
         try:
             from app.config import get_llm
+            from app.utils.token_tracker import track_as
             from langchain_core.messages import HumanMessage
 
             llm = get_llm()
@@ -237,7 +238,9 @@ class LocalMemory:
                 "务必保留用户最初提出的问题，以及对话中提到的商品名称/SKU编号：\n\n"
                 f"{old_text[:4000]}"
             )
-            response = llm.invoke([HumanMessage(content=prompt)])
+            # 归属标签: 摘要调用计入 "memory_summary", 否则被记账层静默丢弃
+            with track_as("memory_summary"):
+                response = llm.invoke([HumanMessage(content=prompt)])
             summary = response.content if hasattr(response, "content") else str(response)
 
             # 如果之前已有摘要, 合并

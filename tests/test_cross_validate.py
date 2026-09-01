@@ -33,8 +33,22 @@ class TestCrossValidation:
         assert r["intent"] == "inventory_skill"
 
     @patch("app.agent.router._get_llm_with_tools")
-    def test_llm_wrong_kw_overrides_high_conf(self, mock_get):
-        """LLM wrong, keyword conf>=2 -> override to keyword"""
+    def test_llm_result_kept_when_override_off(self, mock_get):
+        """默认: 意图识别以路由 LLM 为准, 关键词不覆盖其结果"""
+        resp = MagicMock()
+        resp.tool_calls = [{"name": "inventory_skill", "args": {"user_input": "x"}}]
+        resp.response_metadata = None
+        m = MagicMock(); m.invoke.return_value = resp
+        mock_get.return_value = m
+        # "佣金规则" 关键词指向 rag_skill(conf=2), 但默认保留 LLM 的选择
+        r = router(self._state("佣金规则是什么"))
+        assert r["intent"] == "inventory_skill"
+
+    @patch("app.agent.router.KEYWORD_OVERRIDE_LLM", True)
+    @patch("app.agent.router._get_llm_with_tools")
+    def test_kw_overrides_when_switch_enabled(self, mock_get):
+        """开启 ROUTER_KEYWORD_OVERRIDE 后, 高置信关键词可覆盖 LLM (恢复旧行为)"""
+        # 注: @patch 带具体值时不注入参数, 此处签名只有 mock_get
         resp = MagicMock()
         resp.tool_calls = [{"name": "inventory_skill", "args": {"user_input": "x"}}]
         resp.response_metadata = None

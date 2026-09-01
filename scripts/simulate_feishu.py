@@ -37,7 +37,6 @@ def load_env(path=".env"):
 MESSAGES = [
     ("product_skill 路由", "帮我分析一下 SKU001 无线耳机的销量表现", "product_skill"),
     ("ads_skill 路由", "最近广告投放的 ROI 怎么样，各渠道花费对比", "ads_skill"),
-    ("content_skill 路由", "写一段小红书的蓝牙耳机种草文案", "content_skill"),
     ("inventory_skill 路由", "检查库存预警，哪些商品需要补货", "inventory_skill"),
     ("rag_skill 路由", "平台佣金规则是怎么算的", "rag_skill"),
     ("support_skill 路由", "客户要退货，订单一直没发货怎么办", "support_skill"),
