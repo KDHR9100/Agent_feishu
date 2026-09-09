@@ -7,10 +7,12 @@ from evaluation.adapters.agent_adapter import (
     AgentAdapter,
     MockFeishuAgent,
     RealFeishuAgent,
+    apply_isolation_env,
     has_pricing_directive,
     load_attacks,
     load_skills_manifest,
     manifest_skill_names,
+    restore_env,
 )
 
 __all__ = [
@@ -20,8 +22,10 @@ __all__ = [
     "AgentAdapter",
     "MockFeishuAgent",
     "RealFeishuAgent",
+    "apply_isolation_env",
     "has_pricing_directive",
     "load_attacks",
     "load_skills_manifest",
     "manifest_skill_names",
+    "restore_env",
 ]

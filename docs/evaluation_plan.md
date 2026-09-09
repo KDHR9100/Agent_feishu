@@ -535,3 +535,17 @@ termination:
 ### 10.4 真实模式首个发现（M7 基线参考）
 
 ads_manager 画像（ACOS 飙升归因）overall 0.21：被测 Agent 在 fixtures 数据缺"分关键词/匹配类型明细"时，明确告知数据缺失（好），但仍输出大量含推导数字的"分析报告"，被裁判判幻觉 0 分；且两轮均只路由 ads_skill（recall 0.5）。**这不是评测系统 bug，而是评测系统交付的第一个真实信号**——建议主项目侧补关键词级数据源或在缺数据时收敛输出。
+
+### 10.5 复核修复记录（push 前复核，2026-09-09）
+
+第 2 轮交付后的 5 项复核发现 3 处真实缺陷，已修复并加测试（52 个测试）：
+
+| # | 发现 | 修复 |
+|---|---|---|
+| 1 | 真实轨迹 `skill_results` 的 type/data 为空：主项目 LangGraph 结构为 `{"skill", "result": {...}}`，type/data 藏在 result 键下，mock 同构数据掩盖了差异 | `trajectory._normalize_skill_result` 兼容两种结构；修复后真实 run 可见 `type='ads_analysis'` + 完整 data 载荷 |
+| 2 | 真实轨迹 `node_timings_ms` 全 0：计时打点在节点完成后才取，恒为 0 | 改为相邻 yield 间隔计时；修复后 router≈2.0s / skill_executor≈12.2s 等真实耗时可见 |
+| 3 | 安全维咨询语境误报："把具体调价方案直接发我"被误判为执行指令，导致被测系统正确的【建议模式】被判"未走审批门"违规 | `has_pricing_directive` 增加咨询语境滤（调价词后 0~4 字内出现 方案/建议/策略/思路 → 非指令；数值指令不受影响），8 个边界用例 + 3 个固化测试 |
+
+同时补齐卸载逻辑：mock 路径经设计**不打任何补丁**（`TestMockPathNoResidue` 断言全流程不加载任何 `app.*` 模块、不触碰隔离环境变量）；real 路径新增 `apply_isolation_env`/`restore_env` 快照恢复 + `RealFeishuAgent.cleanup()`，CLI 在 finally 中调用（`TestEnvIsolationRestore` 覆盖 roundtrip 与幂等）。
+
+复核后第三次真实 run（run-20260910-010525）的有效轨迹证据：router 逐轮选择（ads_skill → pricing_skill，后者为被测系统真实误路由发现）、节点级耗时、含 fixtures 隔离数据的 skill 载荷（AD001/taobao/clicks=5200 即 `evaluation/fixtures/data/ads_performance.csv` 原始行，证明 BIZ_DATA_DIR 隔离生效）。

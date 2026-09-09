@@ -103,14 +103,20 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # ---- 逐 episode：模拟对话 → 评测 → 落盘 ----
     episodes: List[dict] = []
-    with TrajectoryWriter(run_dir / "trajectory.jsonl") as writer:
-        for idx, persona in enumerate(personas):
-            logger.info("episode_start", persona=persona.persona_id, index=idx)
-            episode = orchestrator.run_episode(persona, run_id, idx)
-            episode["_expected_tools"] = list(persona.expected_tools)  # type: ignore[assignment]
-            episode["scores"] = run_all_evaluators(evaluators, episode, persona)
-            episodes.append(episode)
-            writer.write(episode)
+    try:
+        with TrajectoryWriter(run_dir / "trajectory.jsonl") as writer:
+            for idx, persona in enumerate(personas):
+                logger.info("episode_start", persona=persona.persona_id, index=idx)
+                episode = orchestrator.run_episode(persona, run_id, idx)
+                episode["_expected_tools"] = list(persona.expected_tools)  # type: ignore[assignment]
+                episode["scores"] = run_all_evaluators(evaluators, episode, persona)
+                episodes.append(episode)
+                writer.write(episode)
+    finally:
+        # 卸载逻辑：real 适配器恢复环境变量快照并摘除日志挂钩（mock 无副作用）
+        cleanup = getattr(adapter, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
 
     # ---- 聚合 + 报告 ----
     metrics = aggregate(episodes, settings)

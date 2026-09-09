@@ -55,6 +55,30 @@ def new_trajectory(
     }
 
 
+def _normalize_skill_result(sr: Dict[str, object]) -> Dict[str, object]:
+    """规范化单条技能结果，兼容两种来源结构：
+
+    - mock 替身：``{"skill": ..., "type": ..., "data": ...}``
+    - 主项目 LangGraph：``{"skill": ..., "result": {"type": ..., "data": ...}}``
+      （workflow.skill_executor 的 append 结构，type/data 藏在 result 键下）
+    """
+
+    if not isinstance(sr, dict):
+        return {"skill": "unknown", "type": "", "data": truncate(sr)}
+    inner = sr.get("result")
+    if isinstance(inner, dict):
+        return {
+            "skill": sr.get("skill", "unknown"),
+            "type": inner.get("type", ""),
+            "data": truncate(inner.get("data", "")),
+        }
+    return {
+        "skill": sr.get("skill", "unknown"),
+        "type": sr.get("type", ""),
+        "data": truncate(sr.get("data", "")),
+    }
+
+
 def make_turn_record(
     turn: int,
     user_message: str,
@@ -77,14 +101,7 @@ def make_turn_record(
         "agent_answer": truncate(agent_answer),
         "intent": intent,
         "skills_to_execute": list(skills_to_execute or []),
-        "skill_results": [
-            {
-                "skill": sr.get("skill", "unknown"),
-                "type": sr.get("type", ""),
-                "data": truncate(sr.get("data", "")),
-            }
-            for sr in (skill_results or [])
-        ],
+        "skill_results": [_normalize_skill_result(sr) for sr in (skill_results or [])],
         "execution_plan": execution_plan,
         "reflect_decision": reflect_decision,
         "retry_rounds": retry_rounds,
