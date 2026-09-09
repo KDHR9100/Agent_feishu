@@ -1,0 +1,4 @@
+ad_id,ad_name,platform,clicks,impressions,spend,conversions,conversion_value,ctr,cpc,roas,campaign_id,ad_group_id,date
+AD001,女装关键词计划-taobao,taobao,5200,90000,6800,410,24500,5.78,1.31,3.60,CAMP001,,2026-09-01
+AD002,连衣裙信息流-douyin,douyin,3100,88000,6200,180,9600,3.52,2.00,1.55,CAMP001,,2026-09-01
+AD003,秋冬新品-temu,temu,4400,70000,4100,260,15800,6.29,0.93,3.85,CAMP002,,2026-09-01

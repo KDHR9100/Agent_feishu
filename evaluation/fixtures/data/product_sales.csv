@@ -1,0 +1,8 @@
+sku,product_name,category,sales_volume,revenue,cost,inventory,avg_price,date
+SKU-TM2001,中秋针织开衫,women_top,1240,68200,31000,2860,55.0,2026-09-01
+SKU-PX01,双11羽绒服,women_outerwear,860,102000,48000,1520,118.6,2026-09-01
+SKU-DB88,法式连衣裙,women_dress,2110,84600,36000,980,40.1,2026-09-01
+SKU-QK09,通勤西装外套,women_suit,1530,91800,41000,1200,60.0,2026-09-01
+SKU-CT505,新款半身裙,women_skirt,640,22400,9800,2100,35.0,2026-09-01
+AMZ-SKU77,FBA Yoga Leggings,sports,1980,79200,39000,340,40.0,2026-09-01
+SKU-A001,基础白T恤,basics,3200,64000,26000,4100,20.0,2026-09-01

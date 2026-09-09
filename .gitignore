@@ -79,6 +79,7 @@ resume_feishu_project.txt
 # Docs folder - keep directory structure only, exclude all content
 docs/*
 !docs/.gitkeep
+!docs/evaluation_plan.md
 
 # Utility / conversion / fix scripts (not part of project)
 _check_pdf_tools.py
@@ -131,3 +132,14 @@ app.log.*
 
 # Session tooling
 .zcode/
+
+# ============================================================
+# 合成用户评测系统运行产物（evaluation/）
+# ============================================================
+evaluation/reports/run-*/
+evaluation/reports/history/
+evaluation_artifacts/
+evaluation_artifacts_real/
+evaluation/runs/
+eval_real.db
+

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feishuagent"
+version = "1.0.0"
+description = "FeishuAgent - 电商运营 LangGraph Agent 及其合成用户评测系统"
+requires-python = ">=3.10"
+
+# 评测模块可选依赖：与主 requirements.txt 完全隔离，安装方式：
+#   pip install -e ".[eval]"
+# langgraph 版本与主依赖锁定一致（1.2.11），不引入版本冲突。
+[project.optional-dependencies]
+eval = [
+    "pyyaml>=6.0",
+    "pydantic-settings>=2.3",
+    "structlog>=24.0",
+    "langgraph>=1.2,<2",
+]
+
+[tool.setuptools]
+packages = ["evaluation"]
