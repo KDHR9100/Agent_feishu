@@ -103,6 +103,19 @@ class TestDerivedNumberHonestyPrompts:
         assert "推导值" in DATA_ANALYSIS_SYSTEM_PROMPT
         assert "推导" in DATA_ANALYSIS_SYSTEM_PROMPT and "简式" in DATA_ANALYSIS_SYSTEM_PROMPT
 
+    def test_product_and_ads_prompts_require_derivation_label(self):
+        """单技能直出路径(商品/广告分析)同样受推导值规则约束——
+        全量 run-20260910-230630 实测: ads_manager 幻觉 0.00 正因该路径漏覆盖"""
+        from app.prompts import ADS_ANALYSIS_PROMPT, PRODUCT_ANALYSIS_PROMPT
+        for prompt in (PRODUCT_ANALYSIS_PROMPT, ADS_ANALYSIS_PROMPT):
+            assert "推导值" in prompt
+            assert "经验假设值" in prompt
+
+    def test_file_analysis_prompt_requires_derivation_label(self):
+        import inspect
+        from app.skills import file_analysis_skill as fas
+        assert "推导值" in inspect.getsource(fas)  # 文件分析内联 system prompt 同受约束
+
     def test_pricing_skill_passes_history_from_call_site(self):
         """统一调用入口: pricing_skill 技能收到会话历史(其余技能不受影响)"""
         from app.agent.workflow import _call_skill
