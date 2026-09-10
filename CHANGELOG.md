@@ -4,7 +4,7 @@
 
 ---
 
-## [2.3.0] - 2026-09-10（合成用户评测系统 M1~M6）
+## [2.3.0] - 2026-09-10（合成用户评测系统 M1~M7：五维评测 + 独立 CI + 全量真实基线）
 
 ### 新增
 - **合成用户评测系统**（`evaluation/`，与主代码完全解耦，`app/` 零改动）：LLM 驱动的"模拟用户 ↔ 被测 Agent"多轮对话评测，从"人工看输出"升级为"可量化、可回归、可对比"的五维打分。方案与实现记录见 `docs/evaluation_plan.md`，运行手册见 `EVAL_README.md`。
@@ -14,11 +14,14 @@
 - **报告产物**：`metrics.json`（overall/五维/分画像/分轮次）、`report.md`、`trajectory.jsonl`（完整轨迹：用户消息、Agent 回答、路由意图、技能调用与载荷、节点耗时、token 用量）、`history/` 单行摘要供跨 run 对比。
 
 ### 测试与 CI
-- 评测模块自带 **52 个测试**（`pytest evaluation/tests`）全绿；新增独立 workflow `eval.yml`：PR 触发单元测试 + mock 全量评测 + **PR 评论回归摘要**（overall/五维/阈值表格自动评论到 PR），real 模式仅手动触发且 continue-on-error——评测失败不阻塞合并，与 `ci.yml` 零耦合。
+- 评测模块自带 **64 个测试**（`pytest evaluation/tests`）全绿；新增独立 workflow `eval.yml`：PR 触发单元测试 + mock 全量评测 + **PR 评论回归摘要**（overall/五维/阈值表格自动评论到 PR），real 模式仅手动触发且 continue-on-error——评测失败不阻塞合并，与 `ci.yml` 零耦合。
 - push 前复核修复：skill_results 兼容主项目嵌套结构（type/data 曾落空导致幻觉误判）、node_timings 按相邻 yield 间隔计时（曾恒 0）、调价指令咨询语境滤（"把调价方案发我"不再误判为执行指令触发安全违规）。
+- real 模式两轮修复（均以真实 run 原句固化为回归测试）：裁判延迟（qwen-max 长输入默认开思考，单调用 73s→1.6s，`EVAL_JUDGE_DISABLE_THINKING` + 超时可配）；安全维指令探测器四类误报（能力问句/条件将来时/否定式/复合名词/状态问句）+ 检查 2 放行"审批门被传达"式回答。
 
-### 真实发现（首份信号，非评测系统 bug）
-- ads_manager 画像（ACOS 飙升归因）real smoke：overall 0.21 —— 其中幻觉 0 分大部分为采集缺陷误判（修复后复测 1.0）；真实缺陷候选为 **工具召回不足**（只调 ads_skill、漏 data_analysis_skill，recall 0.5）与数据缺失场景输出策略，待全量真实基线（M7）确认后进入修复闭环。
+### 全量真实基线（M7 定稿，run-20260910-132010）
+- 13 画像 × 5 轮（sim=qwen3.8-flash，judge=qwen3.8-max 关思考，被测=qwen3.6-flash，1315s）：**overall 0.5149**（总分门禁 0.75 未过）；五维 = 任务完成 0.17 / 多轮一致性 0.33 / 工具准确 0.85 / 幻觉控制 0.52 / **安全合规 1.00（13×5 轮全部攻击拦截、全部调价指令正确进审批门）**。
+- 五维阈值按"基线 − 容差 = 回归地板"回填 `eval_config.yaml`（安全维零容忍保持 1.0）。
+- **缺陷档案**（M7b 修复闭环输入，详见 `docs/evaluation_plan.md` §10.8）：① 审批状态跨会话泄漏（root cause：`recent_approvals` 全局兜底回退）② 建议模式模板复读致任务不完成 ③ 推导数字泛滥致幻觉维 11/13 失败 ④ 多轮指代丢失。修复走独立分支单独 PR，本 PR 保持 `app/` 零改动红线。
 
 ---
 

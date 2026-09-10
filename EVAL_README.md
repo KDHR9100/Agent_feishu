@@ -23,13 +23,31 @@ ls evaluation/reports/run-*/        # report.md / report.html / metrics.json / t
 EVAL_MODE=real
 EVAL_SIM_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1   # 模拟用户
 EVAL_SIM_API_KEY=sk-xxx
-EVAL_SIM_MODEL=qwen3.6-flash
-EVAL_JUDGE_API_BASE=...                                              # 裁判（建议与被测模型异源）
+EVAL_SIM_MODEL=qwen3.8-flash
+EVAL_JUDGE_API_BASE=...                                              # 裁判（建议与被测模型异源或至少异档）
 EVAL_JUDGE_API_KEY=...
-EVAL_JUDGE_MODEL=...
+EVAL_JUDGE_MODEL=qwen3.8-max
+EVAL_JUDGE_DISABLE_THINKING=true    # DashScope qwen3 系列：关思考模式，裁判单调用 73s→1.6s
 # 被测 Agent 本体沿用主项目 .env 的 LLM_*/ROUTER_* 配置
-python -m evaluation.cli run --persona ads_manager --max-turns 2 --eval-mode real
 ```
+
+可选调优：`EVAL_SIM_TIMEOUT`（默认 60s）/ `EVAL_JUDGE_TIMEOUT`（默认 240s，裁判 prompt 含完整轨迹，长于普通对话）。
+
+```bash
+# 单画像 smoke（约 50s，验证配置与读数）
+python -m evaluation.cli run --persona ads_manager --max-turns 2 --eval-mode real
+
+# 全量基线（13 画像 × 5 轮，约 30~40 分钟；产物在 evaluation/reports/run-*/）
+python -m evaluation.cli run --persona all --max-turns 5 --eval-mode real
+```
+
+### 已知坑（实测）
+
+- **DashScope qwen3 系列长输入默认开思考**：裁判单调用实测 73s（reasoning_tokens 占完成 98%），不开 `EVAL_JUDGE_DISABLE_THINKING` 时全量基线不可行。打分任务无需长思考，关掉后评分结论一致。
+- **OpenAI 等严格校验未知参数的端点**保持思考开关为默认 `false`（`enable_thinking` 会被拒）。
+- 每个画像一个 episode；攻击者画像（attacker）同样跑满，安全门由安全维一票否决。
+- 运行产物目录（`evaluation/reports/run-*/`、`history/`）已被 gitignore，基线结论固化在 `docs/evaluation_plan.md` §10 与 CHANGELOG，不放轨迹原始数据。
+- **全量真实基线已定稿**（run-20260910-132010，2026-09-10）：overall 0.5149、安全维 1.00、五维阈值按"基线 − 容差"回填 `configs/eval_config.yaml`——详见 `docs/evaluation_plan.md` §10.8（含缺陷档案与 M7b 修复闭环计划）。
 
 ## 常用命令
 
@@ -37,7 +55,7 @@ python -m evaluation.cli run --persona ads_manager --max-turns 2 --eval-mode rea
 python -m evaluation.cli list-personas          # 列出 13 个画像
 python -m evaluation.cli validate               # 校验画像 YAML + 配置
 python -m evaluation.cli run --persona temu_operator --eval-mode mock
-python -m pytest evaluation/tests -q            # 评测模块自身测试（46 个）
+python -m pytest evaluation/tests -q            # 评测模块自身测试（56 个）
 ```
 
 ## 红线
