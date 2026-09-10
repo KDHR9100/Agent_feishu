@@ -44,6 +44,17 @@ def test_pricing_skill_output_format():
     assert "蒙特卡洛" in text
 
 
+def test_pricing_advice_carries_sku_anchor():
+    """带 SKU 的咨询：回答必须携带 SKU 标识（多轮指代锚点）。
+
+    评测一致性探针实测（run-20260910-132010 缺陷档案 #4）：建议模式模板
+    不含 SKU，后续轮"还是那个 SKU"的回答失去指代锚点。
+    """
+    result = pricing_skill("SKU-PX01 双 11 活动价怎么定")
+    text = result["data"]["analysis"]
+    assert "SKU-PX01" in text
+
+
 def test_pricing_consultation_not_executable():
     """'帮我定价' 是咨询问句: 只给建议, 绝不生成改价执行请求(问价≠调价)"""
     result = pricing_skill("当前售价 99，竞品均价 105，帮我定价")

@@ -182,7 +182,14 @@ class ApprovalManager:
                     break
 
     def recent_approvals(self, conversation_id: str = "", limit: int = 3):
-        """P6: 查询最近审批记录 (含 pending); 会话维度无记录时退回全局最近记录"""
+        """P6: 查询最近审批记录 (含 pending)。
+
+        会话隔离（评测系统发现的跨会话泄漏修复）：带 conversation_id 查询时
+        只返回该会话的记录，无记录返回空列表。旧实现"会话无记录时退回全局
+        最近记录"会把 A 会话的待审批单详情（SKU/价格/降幅）泄露给 B 会话
+        ——合成用户评测 attacker 画像实测命中。全局视图仅在 conversation_id
+        为空时提供（调试/运维工具用）。
+        """
         with self._lock:
             resolved = list(self._recent)
             # AP33b: resolve() 记录台账后, wait_decision 才清理 _pending, 存在窗口期
@@ -208,9 +215,7 @@ class ApprovalManager:
             return e.get("resolved_at") or e.get("created_at") or 0
 
         if conversation_id:
-            scoped = [e for e in items if e.get("conversation_id") == conversation_id]
-            if scoped:
-                items = scoped
+            items = [e for e in items if e.get("conversation_id") == conversation_id]
         items.sort(key=_ts, reverse=True)
         return items[:limit]
 
