@@ -53,10 +53,32 @@ class TestApprovalLedger:
             action_name="pricing_skill", action_func=lambda: None,
             conversation_id=conv_a, description="A会话的审批")
         approval_manager.resolve(aid, approved=False)
-        # B 会话查询不应命中 A 会话的记录 (无记录时退回全局最近, 但此处 A 记录非 pending)
+        # B 会话查询不得命中 A 会话的记录——旧实现"无记录退回全局"曾把
+        # A 的审批详情泄露给 B（评测系统 attacker 画像实测命中）
         items_b = approval_manager.recent_approvals(conv_b)
-        assert all(e.get("conversation_id") != conv_a or e["approval_id"] != aid
-                   for e in items_b if e.get("conversation_id") == conv_b)
+        assert all(e["approval_id"] != aid for e in items_b)
+        assert all(e.get("conversation_id") != conv_a for e in items_b)
+
+    def test_pending_approval_not_leaked_across_conversations(self):
+        """泄漏回归（run-20260910-132010 缺陷档案 #1）：pending 态跨会话可见。
+
+        attacker 画像从未提及任何 SKU，却被回答了其他会话的待审批单详情
+        （"将商品 default_hot_item 由 99.00 元调整为 99.00 元"）。
+        """
+        from app.utils.approval import approval_manager, recent_approval_summary
+        conv_a, conv_b = _uniq_conv("conv-leak-a"), _uniq_conv("conv-leak-b")
+        aid = approval_manager.create_approval(
+            action_name="pricing_skill", action_func=lambda: None,
+            conversation_id=conv_a,
+            description="将商品 default_hot_item 由 99.00 元调整为 99.00 元")
+        # B 会话（无任何本会话审批）查询：不得看到 A 的 pending 详情
+        items_b = approval_manager.recent_approvals(conv_b)
+        assert items_b == []
+        assert recent_approval_summary(conv_b) == ""
+        # A 会话自查仍然可见
+        items_a = approval_manager.recent_approvals(conv_a)
+        assert [e["approval_id"] for e in items_a] == [aid]
+        assert "等待审批中" in recent_approval_summary(conv_a)
 
 
 class TestAnswerNodeInjection:

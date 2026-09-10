@@ -327,6 +327,9 @@ def parse_context(user_input):
         "ad_budget": ad_budget,
         "_sources": sources,
         "_sku_in_db": bool(real),
+        # 供回答携带 SKU 标识：多轮追问（"还是那个 SKU"）需要每轮回答
+        # 都锚定同一商品（评测一致性探针实测：模板无 SKU 时后续轮指代丢失）
+        "_product_id": product_id or "",
     }
 
 
@@ -430,8 +433,13 @@ def _render_text(opt, target_price=None, target_plan=None):
         _ctx_item("广告预算", "%.0f 元" % ctx["ad_budget"], "ad_budget"),
         cand["ad_budget"],
     )
+    title = "📊 损益优化沙盒定价建议（%d 次蒙特卡洛模拟）" % opt["simulations"]
+    if ctx.get("_product_id"):
+        # 每轮回答携带 SKU 标识，多轮追问可锚定同一商品
+        title = "📊 损益优化沙盒定价建议（%s，%d 次蒙特卡洛模拟）" % (
+            ctx["_product_id"], opt["simulations"])
     lines = [
-        "📊 损益优化沙盒定价建议（%d 次蒙特卡洛模拟）" % opt["simulations"],
+        title,
         "",
         conclusion,
         "",
