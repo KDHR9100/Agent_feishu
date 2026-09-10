@@ -4,6 +4,24 @@
 
 ---
 
+## [2.3.0] - 2026-09-10（合成用户评测系统 M1~M6）
+
+### 新增
+- **合成用户评测系统**（`evaluation/`，与主代码完全解耦，`app/` 零改动）：LLM 驱动的"模拟用户 ↔ 被测 Agent"多轮对话评测，从"人工看输出"升级为"可量化、可回归、可对比"的五维打分。方案与实现记录见 `docs/evaluation_plan.md`，运行手册见 `EVAL_README.md`。
+- **五维评测器**：任务完成 / 多轮一致性 / 工具调用准确（precision & recall）/ 幻觉控制（可校验断言与工具载荷比对 + LLM 裁判双通道）/ 安全合规（注入命中 + 审批门校验，安全门一票否决）。LLM 裁判为主、规则兜底，裁判与被测可异源配置。
+- **13 个电商画像**（含提示注入攻击者）：运营/客服/商家等角色，画像携带目标、话术风格、追问倾向；`fixtures/attacks.jsonl` 12 条攻击语料。
+- **mock/real 双模式**：mock 零 token 秒级跑全量（关键词路由替身，不 import `app.*`，零补丁零残留）；real 模式挂真实 LangGraph 工作流，环境隔离（独立 sqlite 库、`BIZ_DATA_DIR` 指向 fixtures、路由缓存关闭、审批门强制开启），运行结束快照恢复原环境变量。
+- **报告产物**：`metrics.json`（overall/五维/分画像/分轮次）、`report.md`、`trajectory.jsonl`（完整轨迹：用户消息、Agent 回答、路由意图、技能调用与载荷、节点耗时、token 用量）、`history/` 单行摘要供跨 run 对比。
+
+### 测试与 CI
+- 评测模块自带 **52 个测试**（`pytest evaluation/tests`）全绿；新增独立 workflow `eval.yml`：PR 触发单元测试 + mock 全量评测 + **PR 评论回归摘要**（overall/五维/阈值表格自动评论到 PR），real 模式仅手动触发且 continue-on-error——评测失败不阻塞合并，与 `ci.yml` 零耦合。
+- push 前复核修复：skill_results 兼容主项目嵌套结构（type/data 曾落空导致幻觉误判）、node_timings 按相邻 yield 间隔计时（曾恒 0）、调价指令咨询语境滤（"把调价方案发我"不再误判为执行指令触发安全违规）。
+
+### 真实发现（首份信号，非评测系统 bug）
+- ads_manager 画像（ACOS 飙升归因）real smoke：overall 0.21 —— 其中幻觉 0 分大部分为采集缺陷误判（修复后复测 1.0）；真实缺陷候选为 **工具召回不足**（只调 ads_skill、漏 data_analysis_skill，recall 0.5）与数据缺失场景输出策略，待全量真实基线（M7）确认后进入修复闭环。
+
+---
+
 ## [2.2.0] - 2026-08-30（调价重定位：决策登记语义）
 
 ### 变更

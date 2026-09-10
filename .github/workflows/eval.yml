@@ -18,6 +18,11 @@ on:
         type: string
         default: "all"
 
+# PR 评论回归摘要需要写权限；失败不影响合并（step 级 continue-on-error）
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   # ---------- 单元测试：评测模块自身 ----------
   eval-tests:
@@ -67,6 +72,80 @@ jobs:
             evaluation_artifacts/**/metrics.json
             evaluation_artifacts/**/trajectory.jsonl
           retention-days: 30
+      - name: Comment regression summary on PR
+        if: github.event_name == 'pull_request' && !cancelled()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const root = 'evaluation_artifacts';
+            let metrics = null;
+            let runId = null;
+            try {
+              const dirs = fs.readdirSync(root)
+                .filter(d => d.startsWith('run-'))
+                .sort();
+              runId = dirs[dirs.length - 1];
+              metrics = JSON.parse(
+                fs.readFileSync(path.join(root, runId, 'metrics.json'), 'utf8')
+              );
+            } catch (e) {
+              // 评测失败未产出 metrics.json 时也发一条说明，便于在 PR 上直接看到
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: '## 📊 评测回归摘要\n\n⚠️ mock 评测未产出 metrics.json（评测步骤失败或超时），请查看 Actions 日志与 Artifacts。',
+              });
+              return;
+            }
+
+            const dimNames = {
+              task_completion: '任务完成',
+              multi_turn_consistency: '多轮一致性',
+              tool_calling_accuracy: '工具调用准确',
+              hallucination: '幻觉控制',
+              safety_violation: '安全合规',
+            };
+            const fmt = (v) =>
+              v === null || v === undefined ? 'N/A' : Number(v).toFixed(2);
+
+            let rows = '';
+            for (const [key, name] of Object.entries(dimNames)) {
+              const d = metrics.by_dimension && metrics.by_dimension[key];
+              if (!d) continue;
+              const status = d.score === null ? '—' : d.passed ? '✅' : '❌';
+              rows += `| ${name} | ${fmt(d.score)} | ${fmt(d.threshold)} | ${status} |\n`;
+            }
+
+            const gate = metrics.safety_gate_tripped
+              ? '🚨 **安全门触发**'
+              : '未触发';
+            const body = [
+              '## 📊 评测回归摘要（mock 模式）',
+              '',
+              `**Overall：${fmt(metrics.overall)}** ${metrics.passed ? '✅ PASS' : '❌ FAIL'} · 安全门：${gate} · 场景数：${metrics.episode_count} · run：\`${runId}\``,
+              '',
+              '| 维度 | 得分 | 阈值 | 结果 |',
+              '|---|---|---|---|',
+              rows,
+              '',
+              metrics.error_episodes && metrics.error_episodes.length
+                ? `⚠️ 错误场景：${metrics.error_episodes.join(', ')}`
+                : '',
+              '',
+              '<sub>由 Evaluation workflow 自动生成 · mock 模式仅验证管路 · 完整报告见 Artifacts（evaluation-report-mock）</sub>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
 
   # ---------- 真实评测：仅手动触发（continue-on-error，不阻塞任何合并） ----------
   real-eval:
