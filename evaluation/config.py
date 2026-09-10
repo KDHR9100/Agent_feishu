@@ -71,12 +71,21 @@ class EvalSettings(BaseSettings):
     sim_api_key: str = ""
     sim_model: str = ""
     sim_temperature: float = 0.7
+    sim_timeout: int = 60
 
     # ---- 评测裁判 LLM（real 模式；留空回退 OPENAI_* 环境变量）----
     judge_api_base: str = ""
     judge_api_key: str = ""
     judge_model: str = ""
     judge_temperature: float = 0.0
+    # 裁判 prompt 含完整轨迹 + 评分细则，推理型模型耗时远高于闲聊，
+    # 默认放宽到 240s；60s 下 qwen-max 档实测会超时回退规则通道
+    judge_timeout: int = 240
+    # DashScope qwen3 系列长输入默认开思考模式（实测裁判单调用 60s+，
+    # 且 reasoning_tokens 占完成的 98%）；打分任务无需长思考，置 true 时
+    # 请求体附加 enable_thinking=false。OpenAI 等严格校验未知参数的
+    # endpoint 请保持 false
+    judge_disable_thinking: bool = False
 
     # ---- 运行控制 ----
     max_turns: int = 8

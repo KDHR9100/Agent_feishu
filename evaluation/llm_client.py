@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import re
-from typing import Deque, List, Optional
+from typing import Deque, Dict, List, Optional
 from collections import deque
 
 import structlog
@@ -68,6 +68,7 @@ class OpenAICompatLLMClient(LLMClient):
         model: str,
         temperature: float = 0.0,
         timeout: int = 60,
+        extra_body: Optional[Dict[str, object]] = None,
     ) -> None:
         if not api_base or not api_key or not model:
             raise EvalConfigError(
@@ -81,19 +82,23 @@ class OpenAICompatLLMClient(LLMClient):
         self._model = model
         self._temperature = temperature
         self._timeout = timeout
+        self._extra_body = extra_body
         self._llm = None  # 延迟构建
 
     def _get_llm(self):  # noqa: ANN202 - 返回类型随延迟导入
         if self._llm is None:
             from langchain_openai import ChatOpenAI  # 延迟导入
 
-            self._llm = ChatOpenAI(
-                base_url=self._api_base,
-                api_key=self._api_key,
-                model=self._model,
-                temperature=self._temperature,
-                timeout=self._timeout,
-            )
+            kwargs: Dict[str, object] = {
+                "base_url": self._api_base,
+                "api_key": self._api_key,
+                "model": self._model,
+                "temperature": self._temperature,
+                "timeout": self._timeout,
+            }
+            if self._extra_body:
+                kwargs["extra_body"] = self._extra_body
+            self._llm = ChatOpenAI(**kwargs)
         return self._llm
 
     def invoke(self, prompt: str) -> str:
@@ -114,6 +119,7 @@ def build_sim_client(settings: EvalSettings) -> Optional[LLMClient]:
         api_key=settings.resolved_sim_key(),
         model=settings.sim_model,
         temperature=settings.sim_temperature,
+        timeout=settings.sim_timeout,
     )
     logger.info("sim_llm_ready", model=settings.sim_model, base=settings.resolved_sim_base())
     return client
@@ -133,6 +139,8 @@ def build_judge_client(settings: EvalSettings) -> Optional[LLMClient]:
         api_key=settings.resolved_judge_key(),
         model=settings.judge_model,
         temperature=settings.judge_temperature,
+        timeout=settings.judge_timeout,
+        extra_body={"enable_thinking": False} if settings.judge_disable_thinking else None,
     )
     main_model = os_main_model()
     if main_model and settings.judge_model == main_model:
