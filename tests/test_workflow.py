@@ -87,3 +87,45 @@ class TestExtractTextFromResult:
         text = _extract_text_from_result(result)
         assert text.startswith("报告摘要")
         assert "reports/report_x.md" in text
+
+class TestDerivedNumberHonestyPrompts:
+    """缺陷档案 #3: 推导数字泛滥——综合回答/数据分析允许推导但必须标注算式"""
+
+    def test_summarization_prompt_requires_derivation_formula(self):
+        from app.agent.workflow import SUMMARIZATION_PROMPT_TEMPLATE
+        assert "推导值" in SUMMARIZATION_PROMPT_TEMPLATE
+        assert "简式" in SUMMARIZATION_PROMPT_TEMPLATE
+        # 只允许"出处数字"与"带算式推导值"两类, 杜绝凭空数字
+        assert "不得出现任何数字" in SUMMARIZATION_PROMPT_TEMPLATE
+
+    def test_data_analysis_prompt_allows_labeled_derivation(self):
+        from app.skills.data_analysis_skill import DATA_ANALYSIS_SYSTEM_PROMPT
+        assert "推导值" in DATA_ANALYSIS_SYSTEM_PROMPT
+        assert "推导" in DATA_ANALYSIS_SYSTEM_PROMPT and "简式" in DATA_ANALYSIS_SYSTEM_PROMPT
+
+    def test_pricing_skill_passes_history_from_call_site(self):
+        """统一调用入口: pricing_skill 技能收到会话历史(其余技能不受影响)"""
+        from app.agent.workflow import _call_skill
+        captured = {}
+
+        def _fake_pricing(user_input, file_path, file_content, tool_result, history=None):
+            captured["history"] = history
+            return {"type": "analysis", "data": {"analysis": "ok"}}
+
+        def _fake_other(user_input, file_path, file_content, tool_result):
+            captured["other_args"] = 4
+            return {"type": "analysis", "data": {"analysis": "ok"}}
+
+        import app.agent.workflow as wf
+        orig = dict(wf.SKILL_REGISTRY)
+        try:
+            wf.SKILL_REGISTRY["pricing_skill"] = _fake_pricing
+            wf.SKILL_REGISTRY["product_skill"] = _fake_other
+            _call_skill("pricing_skill", "q", None, None, None,
+                        {"history": [{"role": "user", "content": "SKU001"}]})
+            _call_skill("product_skill", "q", None, None, None, {"history": []})
+        finally:
+            wf.SKILL_REGISTRY.clear()
+            wf.SKILL_REGISTRY.update(orig)
+        assert captured["history"] == [{"role": "user", "content": "SKU001"}]
+        assert captured["other_args"] == 4

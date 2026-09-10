@@ -135,6 +135,22 @@ def _extract_product_id(user_input):
     return m.group(1).strip() if m else None
 
 
+def _last_sku_from_history(history):
+    """从会话历史的用户消息中提取最近提到的 SKU; 无则返回 None
+
+    评测缺陷档案 #2/#4: 追问轮("弹性假设会不会把结论带偏?")通常不再复述
+    SKU, 若只看本轮输入会退回默认基准商品并触发"未识别到具体商品"失忆话术;
+    定价上下文应锚定本会话正在讨论的那个 SKU。
+    """
+    for msg in reversed(list(history or [])):
+        if msg.get("role") != "user":
+            continue
+        pid = _extract_product_id(str(msg.get("content", "")))
+        if pid:
+            return pid
+    return None
+
+
 # 用户明示目标价的口语关键词 (如 "降到 101" / "调高到 120" / "改为 89.9")
 # 注意: "降价到/涨价到/提价到" 必须先于金额指令解析, 否则 "降价到99元" 会被误读为 "降99元"
 TARGET_PRICE_KEYWORDS = [
@@ -271,7 +287,7 @@ def _parse_directive(user_input, current_price):
     return None
 
 
-def parse_context(user_input):
+def parse_context(user_input, product_id=None):
     """解析定价上下文, 缺失项按优先级回退并记录来源
 
     回退优先级:
@@ -279,12 +295,13 @@ def parse_context(user_input):
     - 库存:     用户口语明示 > 库内真实库存(指定 SKU 时) > 配置默认值
     - 竞品均价/广告预算: 用户口语明示 > 配置默认值 (库内无竞品/预算数据)
 
+    product_id 可传入会话内已锁定的 SKU (本轮输入未点名时兜底);
     _sources 记录各字段来源, 供 _render_text 如实标注"真实数据/示例基准",
     杜绝把默认值当真实上下文展示 (P8)。
     """
     cfg = OPTIMIZER_CONFIG
     user_input = user_input or ""
-    product_id = _extract_product_id(user_input)
+    product_id = product_id or _extract_product_id(user_input)
     real = _load_real_product_context(product_id) if product_id else {}
     sources = {}
 
@@ -343,6 +360,148 @@ def build_candidates(current_price, ad_budget):
         }
         for i, (pf, af) in enumerate(CANDIDATE_TEMPLATE)
     ]
+
+
+# 敏感性分析触发词: 用户想看"模型假设变动时结论是否稳"
+_SENSITIVITY_MARKS = ("敏感性", "敏感度", "假设敏感", "模型假设", "弹性")
+
+# 追问轮要求重跑的措辞: 即使没给新参数也应重发完整测算, 不走补充回答
+_RERUN_MARKS = ("重跑", "再跑", "重新跑", "重新算", "重新测", "再算一次", "再测一次")
+
+
+def _sensitivity_lines(ctx, n_sims=400, seed=20260910):
+    """价格弹性假设 ±20% 的最优方向稳健性检验 (确定性, 同种子对比)
+
+    评测缺陷档案 #2: 定价分析师连续 5 轮索要"弹性敏感性"均不可得——
+    沙盒只有单一弹性假设的输出。这里固定候选集与随机种子, 仅扰动弹性
+    (context.elastic 覆盖), 输出最优价方向是否翻转, 让结论的可信边界可见。
+    """
+    cfg = OPTIMIZER_CONFIG
+    context = {
+        "competitor_price": ctx["competitor_price"],
+        "inventory": ctx["inventory"],
+        "base_sales": cfg["base_sales"],
+        "ad_budget": ctx["ad_budget"],
+    }
+    candidates = build_candidates(ctx["current_price"], ctx["ad_budget"])
+    current_price = float(ctx["current_price"])
+
+    def _direction(price):
+        if price < current_price - 1e-9:
+            return "降价"
+        if price > current_price + 1e-9:
+            return "涨价"
+        return "维持原价"
+
+    rows = []
+    for factor, label in ((0.8, "×0.8（需求弹性偏低）"), (1.2, "×1.2（需求弹性偏高）")):
+        perturbed = dict(context, elastic=cfg["price_elasticity"] * factor)
+        result = solve(candidates, perturbed, n_sims=n_sims, seed=seed)
+        best_price = result["best"]["candidate"]["price"]
+        direction = _direction(best_price)
+        rows.append(
+            "- 弹性 %s（%.2f）：最优价 %.2f 元 → %s方向"
+            % (label, cfg["price_elasticity"] * factor, best_price, direction)
+        )
+    # 基准方向取主建议 (opt.change_pct 的符号), 与扰动档对比
+    lines = ["【敏感性】价格弹性假设 ±20%% 时最优方向检验（%d 次模拟/档，其余假设不变）：" % n_sims]
+    lines += rows
+    return lines
+
+
+def _direction_of(opt):
+    if opt["change_pct"] < 0:
+        return "降价"
+    if opt["change_pct"] > 0:
+        return "涨价"
+    return "维持原价"
+
+
+def _sensitivity_block(ctx, opt, n_sims=400, seed=20260910):
+    """带结论的敏感性小节: 三方向一致 → 结论稳健; 任一翻转 → 如实示警"""
+    lines = _sensitivity_lines(ctx, n_sims=n_sims, seed=seed)
+    # 从行文本回收各扰动档方向, 与基准方向对比
+    perturbed_dirs = ["降价" if "降价方向" in ln else ("涨价" if "涨价方向" in ln else "维持原价方向")
+                      for ln in lines[1:]]
+    base_dir = _direction_of(opt)
+    all_same = all(
+        d == ("维持原价方向" if base_dir == "维持原价" else "%s方向" % base_dir)
+        for d in perturbed_dirs
+    )
+    if all_same:
+        lines.append(
+            "结论：最优「%s」方向在弹性 ±20%% 假设区间内保持成立，建议可作为决策依据"
+            "（弹性基准值 %.2f，来源：系统默认假设）。" % (base_dir, OPTIMIZER_CONFIG["price_elasticity"])
+        )
+    else:
+        lines.append(
+            "⚠️ 注意：弹性假设变动会改变最优方向（出现 %s/降价/涨价不一致），"
+            "建议先核实真实弹性区间再决策。" % base_dir
+        )
+    return "\n".join(lines)
+
+
+def _advice_already_sent(history):
+    """本会话是否已发过完整沙盒建议模板 (以标题标记识别)"""
+    for msg in history or []:
+        if msg.get("role") == "assistant" and "损益优化沙盒定价建议" in str(msg.get("content", "")):
+            return True
+    return False
+
+
+def _has_new_context_numbers(user_input):
+    """本轮输入是否明示了新的定价上下文参数 (售价/竞品/库存/预算)"""
+    user_input = user_input or ""
+    return any(
+        _parse_number(user_input, keys) is not None
+        for keys in (["当前售价", "当前价格", "现价", "售价"],
+                     ["竞品均价", "竞品价", "竞对价"],
+                     ["库存量", "库存"],
+                     ["广告预算", "预算"])
+    )
+
+
+def _supplement_answer(opt, ctx, product_id, want_sensitivity):
+    """追问轮的补充式回答: 逐点回应上一轮建议中被追问的内容, 不重发整块模板
+
+    评测缺陷档案 #2: 建议模式下每轮重发同一模板且不回应追问的具体参数,
+    task_completion 直接 0 分。这里改为: 已发过完整建议且本轮无新参数时,
+    只回答被追问的点 (置信区间数值/各假设来源/敏感性), 并说明如何重跑。
+    """
+    best = opt["best"]
+    src = ctx.get("_sources", {})
+    lines = []
+    title = "📌 针对您追问的补充说明（不再重发完整建议）"
+    if product_id:
+        title += "（本会话讨论商品：%s）" % product_id
+    lines += [title, ""]
+    lines.append(
+        "- 95%% 置信区间：期望净利润 %.0f 元，区间 [%.0f, %.0f]"
+        "（%d 次蒙特卡洛本次复核值，口径与上一轮一致）"
+        % (best["mean_profit"], best["ci_lower"], best["ci_upper"], opt["simulations"])
+    )
+    lines.append(
+        "- 模型假设与数据来源：当前售价 %.2f 元（%s）｜库存 %.0f 件（%s）｜"
+        "竞品均价 %.2f 元（%s）｜广告预算 %.0f 元（%s）｜价格弹性 %.2f（系统默认假设）"
+        % (ctx["current_price"], src.get("current_price", "示例基准"),
+           ctx["inventory"], src.get("inventory", "示例基准"),
+           ctx["competitor_price"], src.get("competitor_price", "示例基准"),
+           ctx["ad_budget"], src.get("ad_budget", "示例基准"),
+           OPTIMIZER_CONFIG["price_elasticity"])
+    )
+    lines.append(
+        "- 结论回顾：建议%s %.1f%%（%.2f → %.2f 元），ROI %.2f → %.2f"
+        % (_direction_of(opt), abs(opt["change_pct"]), ctx["current_price"],
+           best["candidate"]["price"], opt["current_roi"], opt["best_roi"])
+    )
+    if want_sensitivity:
+        lines.append("- " + _sensitivity_block(ctx, opt).replace("\n", "\n  "))
+    lines.append(
+        "- 如需按新参数重跑，请直接给出数值（如“用 118.6 和 1520 重跑”）；"
+        "如需执行调价，请下达明确指令（如“降价 20%”），经审批后生效。"
+    )
+    return {"type": "analysis", "data": {"analysis": "\n".join(lines)},
+            "is_executable": False, "execution_request": None}
 
 
 def optimize_pricing(ctx, n_sims=None, seed=None):
@@ -464,8 +623,13 @@ def _render_text(opt, target_price=None, target_plan=None):
     return "\n".join(lines)
 
 
-def pricing_skill(user_input, file_path=None, file_content=None, tool_result=None):
-    """技能入口: 签名与其余 12 个技能保持一致"""
+def pricing_skill(user_input, file_path=None, file_content=None, tool_result=None, history=None):
+    """技能入口: 签名与其余 12 个技能保持一致 (history 为可选的会话记忆)
+
+    history 由工作流层传入 (state["history"]), 用于:
+    - 本轮未点名 SKU 时锚定会话内最近讨论的商品 (缺陷档案 #2/#4)
+    - 建议模式追问轮去重: 已发过完整建议且无新参数时改发补充回答 (缺陷档案 #2)
+    """
     user_input = user_input or ""
     # P4: 负价格显式拒绝 —— 不进入任何计算, 也不生成审批单
     if _NEGATIVE_PRICE_RE.search(user_input):
@@ -490,7 +654,10 @@ def pricing_skill(user_input, file_path=None, file_content=None, tool_result=Non
             "is_executable": False,
             "execution_request": None,
         }
-    ctx = parse_context(user_input)
+    # 会话 SKU 记忆: 本轮未点名时锚定会话内最近讨论的商品 (含真实数据加载与标题)
+    session_sku = _last_sku_from_history(history)
+    product_id = _extract_product_id(user_input) or session_sku
+    ctx = parse_context(user_input, product_id=product_id)
     logger.info(
         "[pricing_skill] ctx=%s input_preview=%s",
         ctx, user_input[:60],
@@ -514,13 +681,31 @@ def pricing_skill(user_input, file_path=None, file_content=None, tool_result=Non
     else:
         exec_price = cand["price"]
         target_plan = None
+    want_sensitivity = any(m in user_input for m in _SENSITIVITY_MARKS)
+    explicit_directive = (
+        (target_price is not None and target_price > 0)
+        or bool(directive and directive["price"] > 0)
+    )
+    # 追问去重 (缺陷档案 #2): 建议已发过 + 本轮无明示指令 + 未给新参数 + 非重跑措辞
+    # → 不再重发整块模板, 只补充回应被追问的点
+    if (
+        not explicit_directive
+        and _advice_already_sent(history)
+        and not _has_new_context_numbers(user_input)
+        and not any(m in user_input for m in _RERUN_MARKS)
+    ):
+        logger.info("[pricing_skill] follow-up dedup: supplement instead of full template")
+        return _supplement_answer(opt, ctx, product_id, want_sensitivity)
     text = _render_text(
         opt,
         target_price=exec_price if target_plan else None,
         target_plan=target_plan,
     )
+    # 敏感性小节 (缺陷档案 #2): 用户要求假设敏感性时附上 ±20% 弹性方向检验
+    if want_sensitivity:
+        text += "\n" + _sensitivity_block(ctx, opt) + "\n"
     # P8: 无具体商品且未明示现价时, 显式披露默认口径, 避免"编造上下文"观感
-    has_sku = bool(_extract_product_id(user_input))
+    has_sku = bool(product_id)
     user_price = _parse_number(user_input, ["当前售价", "当前价格", "现价", "售价"])
     if not has_sku and user_price is None:
         text = ("⚠️ 未识别到具体商品/SKU，以下按店铺默认基准商品测算"
@@ -533,10 +718,6 @@ def pricing_skill(user_input, file_path=None, file_content=None, tool_result=Non
     # 只有明示调价指令(目标价/涨跌幅/折扣)才产生执行请求、进入审批闭环;
     # 咨询问句("卖多少钱合适")与其余无明示指令的输入只输出沙盒建议,
     # is_executable=False → 不走 executor 审批闭环, 不产生审批卡片
-    explicit_directive = (
-        (target_price is not None and target_price > 0)
-        or bool(directive and directive["price"] > 0)
-    )
     if not explicit_directive:
         if consultative:
             text = ("【咨询模式】您是在征询决策建议，以下为沙盒测算分析，未发起任何调价操作。\n\n"
@@ -553,7 +734,7 @@ def pricing_skill(user_input, file_path=None, file_content=None, tool_result=Non
             "execution_request": None,
         }
     exec_change_pct = (exec_price - ctx["current_price"]) / ctx["current_price"] * 100.0
-    product_id = _extract_product_id(user_input) or "default_hot_item"
+    product_id = product_id or "default_hot_item"
     return {
         "type": "analysis",
         "data": {"analysis": text},

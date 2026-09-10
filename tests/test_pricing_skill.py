@@ -4,6 +4,7 @@ from fastapi import FastAPI, APIRouter  # noqa: F401
 from fastapi.testclient import TestClient
 
 from app.skills.pricing_skill import (
+    _last_sku_from_history,
     build_candidates,
     optimize_pricing,
     parse_context,
@@ -259,3 +260,97 @@ def test_unknown_sku_falls_back_to_sample_labels():
     assert ctx["_sku_in_db"] is False
     assert ctx["_sources"]["inventory"] == "示例基准"
     assert ctx["_sources"]["current_price"] != "库内真实数据"
+
+
+# ============================================================
+# 缺陷档案 #2/#4 第二轮: 建议模式会话感知
+# (run-20260910-140936: pricing_analyst 5 轮要不到敏感性、追问轮失忆话术)
+# ============================================================
+
+_HISTORY_WITH_ADVICE = [
+    {"role": "user", "content": "SKU001 双11活动价怎么定"},
+    {"role": "assistant",
+     "content": "【建议模式】…📊 损益优化沙盒定价建议（SKU001，1000 次蒙特卡洛模拟）…"},
+]
+
+
+def test_session_sku_memory_on_followup():
+    """追问轮不再复述 SKU 时, 上下文应锚定会话内最近讨论的商品
+
+    评测一致性维失败实录: turn 2 无 SKU 的追问触发"未识别到具体商品"
+    失忆话术 + 回退默认基准商品。
+    """
+    ctx = parse_context("弹性假设会不会把结论带偏",
+                        product_id=_last_sku_from_history(_HISTORY_WITH_ADVICE))
+    assert ctx["_product_id"] == "SKU001"
+    assert ctx["_sources"]["current_price"] == "库内真实数据"  # 锚定 SKU001 的真实价
+
+
+def test_followup_supplement_instead_of_template_repeat():
+    """已发过完整建议 + 本轮纯追问(无新参数无指令): 只补充回应, 不重发整块模板"""
+    result = pricing_skill("95%置信区间到底给不给，弹性假设会不会把结论带偏",
+                           history=_HISTORY_WITH_ADVICE)
+    text = result["data"]["analysis"]
+    assert result["is_executable"] is False
+    assert "补充说明" in text and "不再重发完整建议" in text
+    assert "损益优化沙盒定价建议（" not in text   # 不重发完整模板
+    assert "95% 置信区间" in text                  # 逐点回应置信区间
+    assert "价格弹性" in text                      # 逐点回应弹性假设
+    assert "SKU001" in text                        # 会话 SKU 锚定
+
+
+def test_followup_with_new_numbers_still_full_render():
+    """追问带新参数("用 118.6 和 1520 重跑"): 用户要的是重跑, 应重发完整测算"""
+    result = pricing_skill("用 99 和 50 重跑95%置信区间与敏感性",
+                           history=_HISTORY_WITH_ADVICE)
+    text = result["data"]["analysis"]
+    assert "损益优化沙盒定价建议" in text
+    assert "【敏感性】" in text                     # 敏感性关键词触发小节
+
+
+def test_sensitivity_section_on_first_request():
+    """首轮即要求敏感性: 完整建议附带弹性 ±20% 方向检验小节"""
+    result = pricing_skill("SKU001 双11活动价怎么定，把模型假设敏感性也列出来")
+    text = result["data"]["analysis"]
+    assert "【敏感性】" in text
+    assert "×0.8" in text and "×1.2" in text
+    assert ("保持成立" in text) or ("⚠️" in text)   # 稳健结论或翻转警示二选一
+
+
+def test_sensitivity_deterministic_same_seed():
+    """敏感性三档同种子: 两次调用输出完全一致 (确定性, 可复现)"""
+    ctx = parse_context("当前售价 99，竞品均价 105")
+    opt = optimize_pricing(ctx, seed=42)
+    from app.skills.pricing_skill import _sensitivity_block
+    assert _sensitivity_block(ctx, opt) == _sensitivity_block(ctx, opt)
+
+
+def test_supplement_not_triggered_without_prior_advice():
+    """首轮咨询(历史无建议): 正常完整模板, 不误入补充回答"""
+    result = pricing_skill("SKU001 怎么定价", history=[])
+    assert "损益优化沙盒定价建议" in result["data"]["analysis"]
+
+
+def test_supplement_not_triggered_by_directive():
+    """追问轮带明示调价指令: 走执行闭环, 不被去重逻辑拦截
+
+    会话 SKU 记忆同时修正了执行目标: "那就降价 20%" 锚定正在讨论的
+    SKU001 (库内真实价 99.0) → 79.2, 且审批单 product_id 就是 SKU001;
+    旧逻辑会错误落到 default_hot_item 上 (答非所问商品)。
+    """
+    result = pricing_skill("那就降价 20% 吧", history=_HISTORY_WITH_ADVICE)
+    assert result["is_executable"] is True
+    assert result["execution_request"]["params"]["new_price"] == 79.2
+    assert result["execution_request"]["params"]["product_id"] == "SKU001"
+
+
+def test_disclaimer_suppressed_with_session_sku():
+    """会话已锁定 SKU 的追问轮: 不再出现"未识别到具体商品"失忆话术"""
+    result = pricing_skill("弹性假设会不会把结论带偏", history=_HISTORY_WITH_ADVICE)
+    assert "未识别到具体商品" not in result["data"]["analysis"]
+
+
+def test_disclaimer_kept_without_any_sku():
+    """无任何 SKU 信息时(P8 诚实披露): 免责声明保留, 不因新逻辑丢失"""
+    result = pricing_skill("帮我定个价", history=[])
+    assert "未识别到具体商品" in result["data"]["analysis"]

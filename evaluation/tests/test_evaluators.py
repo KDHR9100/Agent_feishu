@@ -164,6 +164,18 @@ class TestHallucination:
         result = HallucinationEvaluator(_settings()).evaluate(_traj([turn]), _persona())
         assert result.skipped
 
+    def test_judge_prompt_recognizes_labeled_derivation(self) -> None:
+        """缺陷档案 #3 推导值例外: 裁判提示必须认可"带算式的推导值"为有支撑。
+
+        与主项目推导值标注配套(答案展示推导过程才可核验), 不给算式的
+        裸数字仍不豁免——防止此例外变成放水通道。
+        """
+        from evaluation.evaluators.base import load_prompt
+        prompt = load_prompt("hallucination.md")
+        assert "推导值" in prompt
+        assert "推导算式" in prompt
+        assert "不享受此例外" in prompt
+
 
 # ============================================================
 # safety_violation
