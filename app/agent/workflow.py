@@ -294,10 +294,11 @@ def _run_data_analysis_skill(user_input, file_path, file_content, tool_result):
     return data_analysis_skill(user_input)
 
 
-def _run_pricing_skill(user_input, file_path, file_content, tool_result):
+def _run_pricing_skill(user_input, file_path, file_content, tool_result, history=None):
     # L4 新增技能: 损益优化沙盒定价 (is_executable, 走 executor 审批闭环)
+    # history: 会话记忆 (缺陷档案 #2/#4) —— 追问轮锚定会话内 SKU、建议去重
     from app.skills.pricing_skill import pricing_skill
-    return pricing_skill(user_input)
+    return pricing_skill(user_input, history=history)
 
 
 def _run_listing_skill(user_input, file_path, file_content, tool_result):
@@ -520,6 +521,16 @@ def _enrich_input_with_history(user_input, state):
     return user_input
 
 
+def _call_skill(skill_name, user_input, file_path, file_content, tool_result, state):
+    """统一技能调用入口: pricing_skill 额外携带会话历史 (建议模式会话感知, 缺陷档案 #2)"""
+    if skill_name == "pricing_skill":
+        return SKILL_REGISTRY[skill_name](
+            user_input, file_path, file_content, tool_result,
+            history=(state or {}).get("history") or [],
+        )
+    return SKILL_REGISTRY[skill_name](user_input, file_path, file_content, tool_result)
+
+
 def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_result, state):
     """执行单个技能, 返回结果"""
     user_input = _enrich_input_with_history(user_input, state)
@@ -529,8 +540,8 @@ def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_
     if skill_name in EXECUTABLE_SKILLS and skill_name in SKILL_REGISTRY:
         with track_as(skill_name, state.get("conversation_id", "")):
             try:
-                result = SKILL_REGISTRY[skill_name](
-                    user_input, file_path, file_content, tool_result
+                result = _call_skill(
+                    skill_name, user_input, file_path, file_content, tool_result, state
                 )
                 monitoring_stats.record_skill_call(skill_name, time.time() - skill_start)
             except Exception as e:
@@ -614,11 +625,11 @@ def _execute_single_skill(skill_name, user_input, file_path, file_content, tool_
             },
         }
     try:
-        # 归属标签: 技能内部 LLM 调用的 token 记入该技能名下
+        # 归属标签: 技能内部 LLM 调用的 token 计入该技能名下
         with track_as(skill_name, state.get("conversation_id", "")):
             if skill_name in SKILL_REGISTRY:
-                result = SKILL_REGISTRY[skill_name](
-                    user_input, file_path, file_content, tool_result
+                result = _call_skill(
+                    skill_name, user_input, file_path, file_content, tool_result, state
                 )
                 monitoring_stats.record_skill_call(
                     skill_name, time.time() - skill_start
@@ -1029,6 +1040,12 @@ SUMMARIZATION_PROMPT_TEMPLATE = """你是一个电商运营Agent的综合回答�
 2. 突出关键数据和结论
 3. 如果结果中有冲突, 给出说明
 4. 用 Markdown 格式输出, 必要时分点列举
+5. 数字诚实性: 技能结果中已有的数字照用; 由你计算得出的数字(毛利率/占比/
+   覆盖天数/差额/排名名次/预警阈值/竞品对比指标等)必须标注为推导值并附
+   简式或依据, 例: "毛利率 59.6%(推导值:(9900-4000)÷9900×100)"、
+   "销量排名第4(推导值:按销量排序)"; 运营建议中的具体数字(建议补货量/
+   安全库存倍数/预算区间等)必须注明"经验假设值"并说明所依据的载荷数字,
+   无依据时只给方向性建议不给具体数字; 除此之外不得出现任何数字
 
 请直接输出综合回答, 不要解释你在做什么。
 """

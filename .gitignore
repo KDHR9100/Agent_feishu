@@ -80,6 +80,7 @@ resume_feishu_project.txt
 docs/*
 !docs/.gitkeep
 !docs/evaluation_plan.md
+!docs/m7b_round2_report.md
 
 # Utility / conversion / fix scripts (not part of project)
 _check_pdf_tools.py
