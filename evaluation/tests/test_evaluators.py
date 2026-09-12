@@ -140,11 +140,108 @@ class TestToolCallingAccuracy:
         result = ToolCallingAccuracyEvaluator(_settings()).evaluate(_traj([]), _persona())
         assert result.skipped
 
+    def test_optional_tools_tolerated_in_precision(self) -> None:
+        """缺陷档案 ⑦：画像声明的可容忍补充技能不稀释 precision。
+
+        轨迹证据（run-20260910-235406 product_selector turn2）：用户问
+        "库存到底还能撑几天"，调 inventory_skill 是合理补充而非路由错误。
+        """
+        persona = _persona(
+            expected_tools=["competitor_skill", "product_skill"],
+            optional_tools=["inventory_skill"],
+        )
+        turns = [
+            _turn(1, "看下商品表现", "商品结果", "product_skill"),
+            _turn(2, "库存还能撑几天", "库存结果", "inventory_skill"),
+            _turn(3, "竞品价格呢", "竞品结果", "competitor_skill"),
+        ]
+        result = ToolCallingAccuracyEvaluator(_settings()).evaluate(
+            _traj(turns), persona
+        )
+        assert result.score == 1.0 and result.passed
+        assert not any("不在画像预期内" in e for e in result.evidence)
+
+    def test_undeclared_extra_tool_still_penalized(self) -> None:
+        """未声明的补充调用照旧扣分——optional 不是万能白名单"""
+        persona = _persona(
+            expected_tools=["competitor_skill", "product_skill"],
+            optional_tools=["inventory_skill"],
+        )
+        turns = [
+            _turn(1, "看下商品表现", "商品结果", "product_skill"),
+            _turn(2, "顺便看下广告", "广告结果", "ads_skill"),
+        ]
+        result = ToolCallingAccuracyEvaluator(_settings()).evaluate(
+            _traj(turns), persona
+        )
+        assert result.score < 1.0
+        assert any("不在画像预期内" in e for e in result.evidence)
+
+    def test_optional_tools_do_not_satisfy_recall(self) -> None:
+        """recall 只认 expected：optional 调了不算覆盖 expected 缺口"""
+        persona = _persona(
+            expected_tools=["competitor_skill", "product_skill"],
+            optional_tools=["inventory_skill"],
+        )
+        turns = [_turn(1, "库存撑几天", "库存结果", "inventory_skill")]
+        result = ToolCallingAccuracyEvaluator(_settings()).evaluate(
+            _traj(turns), persona
+        )
+        assert result.score < 1.0
+
 
 # ============================================================
 # hallucination
 # ============================================================
+class _StubJudge:
+    """按脚本回复的桩裁判：invoke(prompt) → 固定 JSON 字符串"""
+
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+
+    def invoke(self, prompt: str) -> str:  # noqa: ARG002
+        return self._reply
+
+
 class TestHallucination:
+    def test_judge_per_claim_granularity(self) -> None:
+        """缺陷档案 ⑤：一轮 10 个断言 1 个无支撑 → 0.9 分，而非整轮 0 分"""
+        judge = _StubJudge(
+            '{"claims_total": 10, "unsupported_claims": ["毛利率 57%"], "reason": "9/10 有支撑"}'
+        )
+        ev = HallucinationEvaluator(_settings(), judge=judge)
+        turn = _turn(1, "看下数据", "答案含 10 个事实断言，其中 1 个无支撑")
+        result = ev.evaluate(_traj([turn]), _persona())
+        assert abs(result.score - 0.9) < 1e-6 and result.passed
+
+    def test_judge_all_supported_scores_one(self) -> None:
+        judge = _StubJudge(
+            '{"claims_total": 8, "unsupported_claims": [], "reason": "全部有支撑"}'
+        )
+        ev = HallucinationEvaluator(_settings(), judge=judge)
+        turn = _turn(1, "看下数据", "8 个断言全部有支撑")
+        result = ev.evaluate(_traj([turn]), _persona())
+        assert result.score == 1.0 and result.passed
+
+    def test_judge_no_claims_turn_is_perfect(self) -> None:
+        judge = _StubJudge(
+            '{"claims_total": 0, "unsupported_claims": [], "reason": "无事实性陈述"}'
+        )
+        ev = HallucinationEvaluator(_settings(), judge=judge)
+        turn = _turn(1, "在吗", "好的，已为你分析。")
+        result = ev.evaluate(_traj([turn]), _persona())
+        assert result.score == 1.0
+
+    def test_judge_legacy_format_falls_back_to_turn_binary(self) -> None:
+        """旧格式（无 claims_total）兼容：有无支撑即整轮 0/1，不误崩"""
+        judge = _StubJudge(
+            '{"unsupported_claims": ["销量 9999 件"], "reason": "旧格式"}'
+        )
+        ev = HallucinationEvaluator(_settings(), judge=judge)
+        turn = _turn(1, "看下数据", "销量 9999 件（无支撑）")
+        result = ev.evaluate(_traj([turn]), _persona())
+        assert result.score == 0.0 and not result.passed
+
     def test_success_numbers_supported(self) -> None:
         turns = [_turn(1, "SKU-A 卖得如何", "『商品诊断』SKU-A 近 7 天销量 320 件")]
         result = HallucinationEvaluator(_settings()).evaluate(_traj(turns), _persona())

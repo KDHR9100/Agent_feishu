@@ -133,7 +133,19 @@ class HallucinationEvaluator(BaseEvaluator):
             if parsed is None:
                 continue
             claims = parsed.get("unsupported_claims", []) or []
-            if claims:
+            # 按断言粒度计分（缺陷档案 ⑤）：一轮 10 个事实性断言 1 个无支撑
+            # → 0.9 而非整轮 0——部分诚实应被部分计量。旧格式（无
+            # claims_total）退回整轮 0/1 语义
+            try:
+                total = int(parsed.get("claims_total", -1))
+            except (TypeError, ValueError):
+                total = -1
+            if total > 0:
+                unsupported = min(len(claims), total)
+                scores.append(max(0.0, 1.0 - unsupported / total))
+            elif total == 0 and not claims:
+                scores.append(1.0)
+            elif claims:
                 scores.append(0.0)
             else:
                 scores.append(1.0)

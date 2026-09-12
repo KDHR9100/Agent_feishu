@@ -37,6 +37,13 @@ class BasePersona(BaseModel):
         description="行为约束，如: 20% 概率打错字 / 一次提多个需求 / 会跑题",
     )
     expected_tools: List[str] = Field(default_factory=list)
+    optional_tools: List[str] = Field(
+        default_factory=list,
+        description="可容忍补充技能：调用不扣 precision（recall 仍只认 expected）。"
+                    "仅给'合理补充调用'有轨迹证据的画像声明（缺陷档案 ⑦："
+                    "选品问库存/FBA 核对查商品表/经营汇报问广告，属于真人助手的"
+                    "合理补充，非路由错误）",
+    )
     success_criteria: List[str] = Field(default_factory=list)
 
     # ---- 评测辅助字段 ----

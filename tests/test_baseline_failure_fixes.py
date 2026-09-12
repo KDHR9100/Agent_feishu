@@ -394,3 +394,57 @@ class TestApprovalFollowupIntercept:
             out = wf.skill_executor(state)
         skills = [r.get("skill") for r in out.get("skill_results") or []]
         assert "approval_status" not in skills
+
+
+# ============================================================
+# 缺陷档案 ⑥: 消息内联表格识别 (run-20260910-140936 file_analyst
+# 五回合全回"未收到文件"——真人把数据直接贴在聊天里的场景)
+# ============================================================
+class TestInlineTableExtraction:
+
+    def test_semicolon_rows_extracted(self):
+        from app.skills.file_analysis_skill import _extract_inline_table as ex
+        out = ex("A001,520,480；B002,300,650；C003,800,790")
+        assert out == "A001,520,480\nB002,300,650\nC003,800,790"
+
+    def test_header_line_and_multiline(self):
+        from app.skills.file_analysis_skill import _extract_inline_table as ex
+        out = ex("字段：SKU,投放,销售\nA001,520,480\nB002,300,650")
+        assert out.startswith("SKU,投放,销售")
+        assert "A001,520,480" in out
+
+    def test_tab_separated_table(self):
+        from app.skills.file_analysis_skill import _extract_inline_table as ex
+        out = ex("SKU\t库存\t销量\nA001\t50\t100\nB002\t120\t200")
+        assert "A001,50,100" in out and "B002,120,200" in out
+
+    def test_trailing_prose_trimmed_from_last_row(self):
+        from app.skills.file_analysis_skill import _extract_inline_table as ex
+        out = ex("亏损SKU筛选：A001,520,480；B002,300,650；C003,800,790，帮我找出亏损的")
+        assert "帮我找出亏损的" not in out
+        assert "C003,800,790" in out
+
+    def test_prose_only_not_a_table(self):
+        from app.skills.file_analysis_skill import _extract_inline_table as ex
+        assert ex("我传了本周投放销售表，你直接帮我找亏损SKU，字段不全就问我") is None
+        assert ex("你好，请问在吗？") is None
+        assert ex("今天天气不错，我们聊聊") is None
+
+    def test_inline_data_analyzed_not_rejected(self):
+        """有内联数据时不再回'未收到文件'，进入 LLM 分析路径"""
+        from app.skills.file_analysis_skill import file_analysis_skill
+        with patch("app.skills.file_analysis_skill.get_llm") as m:
+            resp = MagicMock()
+            resp.content = "亏损 SKU 为 B002（收入 650 < 投放 300 的口径见数据）"
+            m.return_value.invoke.return_value = resp
+            out = file_analysis_skill(
+                "A001,520,480；B002,300,650；C003,800,790 帮我找亏损SKU")
+        text = str(out)
+        assert "未收到文件" not in text
+        assert "亏损" in text
+
+    def test_no_data_still_honest_diagnosis(self):
+        """无文件也无内联数据：保留诚实诊断（P9 行为不回退）"""
+        from app.skills.file_analysis_skill import file_analysis_skill
+        out = file_analysis_skill("我传了本周投放销售表，你直接帮我找亏损SKU")
+        assert "未收到文件" in str(out)
