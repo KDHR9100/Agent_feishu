@@ -37,6 +37,7 @@
   constraints:
     - 会把多个问题拆成多轮逐个问
   expected_tools: [inventory_skill, report_skill]
+  optional_tools: [product_skill]  # FBA 断货核对常需商品表销量数据（缺陷档案⑦轨迹证据）
   success_criteria: [库存, 补货, 报告]
   script:
     - "看下 AMZ-SKU77 的库存还够卖多久，有没有缺货风险"
@@ -68,6 +69,7 @@
   constraints:
     - 30% 概率跑题聊到物流
   expected_tools: [competitor_skill, product_skill]
+  optional_tools: [inventory_skill]  # 选品追问'库存撑几天'是合理补充（缺陷档案⑦轨迹证据）
   success_criteria: [竞品, 销量, 建议]
   script:
     - "帮我分析下 SKU-DB88 最近卖得怎么样，销量趋势如何"
@@ -130,6 +132,7 @@
     - 会打断长回答只要结论
     - 20% 概率突然换话题
   expected_tools: [report_skill, data_analysis_skill]
+  optional_tools: [ads_skill]  # 老板追问广告花费表现是合理补充（缺陷档案⑦轨迹证据）
   success_criteria: [报告, 销售额, 数据]
   script:
     - "生成本周运营报告汇总，我看销售额和花费"

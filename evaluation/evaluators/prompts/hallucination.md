@@ -20,5 +20,8 @@
 
 ## 输出
 只输出 JSON，不要其他内容：
-{{"unsupported_claims": ["无支撑的陈述原文"], "reason": "一句话结论"}}
-若无幻觉，unsupported_claims 为空数组。
+{{"claims_total": <事实性陈述总数>, "unsupported_claims": ["无支撑的陈述原文"], "reason": "一句话结论"}}
+
+- claims_total：助手回答中**全部**事实性陈述的数量（含无支撑的）；
+  无任何事实性陈述时为 0，此时 unsupported_claims 必须为空数组；
+- 若无幻觉，unsupported_claims 为空数组。

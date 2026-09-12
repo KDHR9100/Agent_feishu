@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from datetime import datetime
 from app.config import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -8,6 +9,71 @@ logger = logging.getLogger("file_analysis_skill")
 
 # P9: 图片扩展名 (与 file_parser_tool 保持一致)
 _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
+
+# ── 缺陷档案 ⑥：消息内联表格识别 ──
+# 评测实录（run-20260910-140936 file_analyst）：真人把表格数据直接贴在
+# 聊天里（"A001,520,480；B002,300,650"），无文件实体，技能五回合全回
+# "未收到文件"。识别内联表格当作文件内容进入分析，而非要求重传。
+_INLINE_ROW_SPLIT_RE = re.compile(r"[；;\n]+")
+_INLINE_CELL_SPLIT_RE = re.compile(r"[,，\t]+")
+_INLINE_PREFIX_RE = re.compile(r"^(?:数据|样例|表格|内容|明细|字段|字段是|表头)\s*[:：]?\s*")
+
+
+def _looks_numeric(cell: str) -> bool:
+    """数字单元格判定（容忍 ¥/%/￥ 前后缀与单位）"""
+    c = cell.strip().rstrip("%％").strip()
+    c = c.lstrip("¥￥$").strip()
+    # 数字+单位（件/元/个/天）视为数字单元格
+    c = re.sub(r"(?:件|元|个|天|kg|g|ml)$", "", c, flags=re.IGNORECASE).strip()
+    try:
+        float(c.replace(",", "").replace("，", ""))
+        return True
+    except ValueError:
+        return False
+
+
+def _extract_inline_table(user_input: str):
+    """从消息文本中提取内联表格，规范化为 CSV 文本；不像表格返回 None
+
+    保守判定，避免把闲聊误当表格：
+    - 表格行 = 至少 2 个单元格（逗号/中文逗号/制表符分隔）；
+    - 连续行构成"表格段"，首行可为文字表头，其余行须含数字单元格；
+    - 表格段至少 2 行才采纳；取满足条件的最长段。
+    """
+    if not user_input:
+        return None
+    segments = [s.strip() for s in _INLINE_ROW_SPLIT_RE.split(user_input) if s.strip()]
+    best_run, run = [], []
+    for seg in segments:
+        s = _INLINE_PREFIX_RE.sub("", seg)
+        cells = [c.strip() for c in _INLINE_CELL_SPLIT_RE.split(s) if c.strip()]
+        is_row = len(cells) >= 2
+        is_data = is_row and any(_looks_numeric(c) for c in cells)
+        if not run:
+            if is_row:  # 首行允许纯文字（表头）或直接数据
+                run = [cells]
+            continue
+        if is_data:
+            run.append(cells)
+        else:
+            # 非数据行中断表格段（后置说明/寒暄），结算并重置
+            best_run = max([best_run, run], key=len) if len(run) >= 2 else best_run
+            run = [cells] if is_row else []
+    if len(run) >= 2 and len(run) > len(best_run):
+        best_run = run
+    if len(best_run) < 2:
+        return None
+    # 尾部清整：行尾紧跟的说明文字（"…C003,800,790，帮我找出亏损的"）会被
+    # 切进最后一行多余单元格——按列数众数裁掉超出的非数字尾单元格
+    from collections import Counter
+    mode_ncols = Counter(len(r) for r in best_run).most_common(1)[0][0]
+    cleaned = []
+    for r in best_run:
+        r = list(r)
+        while len(r) > mode_ncols and not _looks_numeric(r[-1]):
+            r.pop()
+        cleaned.append(r)
+    return "\n".join(",".join(r) for r in cleaned)
 
 
 def _empty_file_diagnosis(file_path):
@@ -65,10 +131,18 @@ def file_analysis_skill(
         return {"type": "file_analysis", "data": data}
 
     if not file_content:
-        return {
-            "type": "file_analysis",
-            "data": _empty_file_diagnosis(file_path),
-        }
+        # 缺陷档案 ⑥：无文件实体时先看消息里有没有内联表格数据
+        # （真人常用"直接贴数据"代替传文件），有则当作文件内容继续分析
+        inline = _extract_inline_table(user_input)
+        if inline:
+            logger.info("[file_analysis] inline table detected (%d chars), analyzing as file", len(inline))
+            file_content = "【消息内联数据】\n" + inline
+            file_path = file_path or "inline_paste.csv"
+        else:
+            return {
+                "type": "file_analysis",
+                "data": _empty_file_diagnosis(file_path),
+            }
 
     # P9: 解析成功但 0 行数据 —— 显式报空, 不把空表丢给 LLM 硬分析
     if "行数: 0" in file_content:

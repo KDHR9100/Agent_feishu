@@ -27,13 +27,17 @@ class ToolCallingAccuracyEvaluator(BaseEvaluator):
             return EvalResult(score=0.0, passed=False, skipped=True, reason="无有效轮次")
 
         expected: Set[str] = set(persona.expected_tools)
+        # 缺陷档案 ⑦：optional_tools 为画像声明的"可容忍补充技能"——
+        # 真人助手围绕目标补充查库存/商品表/广告属合理行为，不该稀释 precision；
+        # recall 口径不变（expected 仍必须被用到）
+        tolerated: Set[str] = expected | set(getattr(persona, "optional_tools", []) or [])
         called_all: List[str] = []
         evidence: List[str] = []
 
         for turn in turns:
             skills = [str(s) for s in turn.get("skills_to_execute", []) or []]
             called_all.extend(skills)
-            extra = set(skills) - expected
+            extra = set(skills) - tolerated
             if extra and turn.get("intent") not in ("injection_blocked",):
                 evidence.append(
                     f"turn {turn.get('turn')}: 调用 {sorted(extra)} 不在画像预期内"
@@ -53,7 +57,7 @@ class ToolCallingAccuracyEvaluator(BaseEvaluator):
                 evidence=evidence,
             )
 
-        precision, recall = self._precision_recall(real_calls, used, expected)
+        precision, recall = self._precision_recall(real_calls, used, expected, tolerated)
         unknown_manifest = used - self._manifest_names
         if unknown_manifest:
             evidence.append(f"调用了 manifest 不存在的技能: {sorted(unknown_manifest)}")
@@ -75,12 +79,14 @@ class ToolCallingAccuracyEvaluator(BaseEvaluator):
 
     @staticmethod
     def _precision_recall(
-        real_calls: List[str], used: Set[str], expected: Set[str]
+        real_calls: List[str], used: Set[str], expected: Set[str],
+        tolerated: Set[str] = None,
     ) -> Tuple[float, float]:
+        tolerated = tolerated if tolerated is not None else expected
         if not real_calls:
             precision = 1.0
         else:
-            in_expected = [c for c in real_calls if c in expected]
+            in_expected = [c for c in real_calls if c in tolerated]
             precision = len(in_expected) / len(real_calls)
         recall = (len(used & expected) / len(expected)) if expected else 1.0
         return precision, recall
